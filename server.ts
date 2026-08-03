@@ -6,6 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
+import crypto from "crypto";
 
 dotenv.config();
 
@@ -15,6 +16,22 @@ interface DbSchema {
   newUsers: any[];
   newNotifications: any[];
   isInitialized?: boolean;
+  offices?: Record<string, {
+    isInitialized?: boolean;
+    clients?: any[];
+    cases?: any[];
+    sessions?: any[];
+    tasks?: any[];
+    documents?: any[];
+    payments?: any[];
+    expenses?: any[];
+    auditLogs?: any[];
+    leads?: any[];
+    officeConfig?: any;
+    subscription?: any;
+    invoices?: any[];
+  }>;
+  // Keep flat keys for backward compatibility migration
   clients?: any[];
   cases?: any[];
   sessions?: any[];
@@ -38,6 +55,7 @@ function readDb(): DbSchema {
         newUsers: parsed.newUsers || [],
         newNotifications: parsed.newNotifications || [],
         isInitialized: parsed.isInitialized || false,
+        offices: parsed.offices || {},
         clients: parsed.clients || [],
         cases: parsed.cases || [],
         sessions: parsed.sessions || [],
@@ -59,6 +77,7 @@ function readDb(): DbSchema {
     newUsers: [],
     newNotifications: [],
     isInitialized: false,
+    offices: {},
     clients: [],
     cases: [],
     sessions: [],
@@ -80,6 +99,104 @@ function writeDb(data: DbSchema) {
   } catch (err) {
     console.error("Error writing db.json:", err);
   }
+}
+
+function migrateDb(db: DbSchema) {
+  let changed = false;
+
+  // 1. Ensure all users have an officeId
+  if (Array.isArray(db.newUsers)) {
+    db.newUsers.forEach((user: any) => {
+      if (!user.officeId) {
+        user.officeId = user.id;
+        changed = true;
+      }
+    });
+  }
+
+  // 2. Ensure offices structure exists
+  if (!db.offices) {
+    db.offices = {};
+    changed = true;
+  }
+
+  // 3. Check for legacy flat data to migrate
+  const hasFlatData = db.isInitialized && (
+    (Array.isArray(db.clients) && db.clients.length > 0) ||
+    (Array.isArray(db.cases) && db.cases.length > 0) ||
+    (Array.isArray(db.sessions) && db.sessions.length > 0) ||
+    (Array.isArray(db.tasks) && db.tasks.length > 0) ||
+    db.officeConfig ||
+    db.subscription
+  );
+
+  if (hasFlatData) {
+    // Determine target officeId: find first Owner or fallback
+    const ownerUser = db.newUsers.find((u: any) => u.role === "صاحب المكتب");
+    const targetOfficeId = ownerUser ? ownerUser.officeId : "office-migrated-default";
+
+    if (!db.offices[targetOfficeId]) {
+      db.offices[targetOfficeId] = {
+        isInitialized: true,
+        clients: db.clients || [],
+        cases: db.cases || [],
+        sessions: db.sessions || [],
+        tasks: db.tasks || [],
+        documents: db.documents || [],
+        payments: db.payments || [],
+        expenses: db.expenses || [],
+        auditLogs: db.auditLogs || [],
+        leads: db.leads || [],
+        officeConfig: db.officeConfig || null,
+        subscription: db.subscription || null,
+        invoices: db.invoices || []
+      };
+      changed = true;
+    }
+
+    // Clean up flat data to avoid redundancy
+    delete db.clients;
+    delete db.cases;
+    delete db.sessions;
+    delete db.tasks;
+    delete db.documents;
+    delete db.payments;
+    delete db.expenses;
+    delete db.auditLogs;
+    delete db.leads;
+    delete db.officeConfig;
+    delete db.subscription;
+    delete db.invoices;
+  }
+
+  if (changed) {
+    writeDb(db);
+    console.log("[MIGRATION] db.json successfully migrated to office-centric structure.");
+  }
+}
+
+function getOfficeData(db: DbSchema, officeId: string) {
+  if (!db.offices) {
+    db.offices = {};
+  }
+  if (!db.offices[officeId]) {
+    db.offices[officeId] = {
+      isInitialized: false,
+      clients: [],
+      cases: [],
+      sessions: [],
+      tasks: [],
+      documents: [],
+      payments: [],
+      expenses: [],
+      auditLogs: [],
+      leads: [],
+      officeConfig: null,
+      subscription: null,
+      invoices: []
+    };
+  }
+  return db.offices[officeId];
 }
 
 // Security & Password Helpers
@@ -111,9 +228,10 @@ function comparePassword(password: string, hash: string): boolean {
 }
 
 // Session Memory Store
-// Token -> { userId, role, isSuperUser, expiresAt }
+// Token -> { userId, officeId, role, isSuperUser, expiresAt }
 const activeSessions = new Map<string, {
   userId: string;
+  officeId: string;
   role: string;
   isSuperUser: boolean;
   expiresAt: number;
@@ -122,9 +240,10 @@ const activeSessions = new Map<string, {
 const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
 function createSession(user: any): string {
-  const token = "sess_" + Math.random().toString(36).substring(2) + "_" + Date.now();
+  const token = "sess_" + crypto.randomBytes(32).toString("hex") + "_" + Date.now();
   activeSessions.set(token, {
     userId: user.id,
+    officeId: user.officeId || user.id,
     role: user.role,
     isSuperUser: !!user.isSuperUser,
     expiresAt: Date.now() + SESSION_DURATION
@@ -214,6 +333,14 @@ function seedSuperAdmin() {
 }
 
 async function startServer() {
+  // Execute database migration on startup
+  try {
+    const db = readDb();
+    migrateDb(db);
+  } catch (err) {
+    console.error("[MIGRATION] Migration on startup failed:", err);
+  }
+
   // Execute Super Admin environmental seeding on startup
   seedSuperAdmin();
 
@@ -232,7 +359,21 @@ async function startServer() {
   // Never expose passwords or password hashes to the client
   app.get("/api/shared-data", (req, res) => {
     const db = readDb();
-    const sanitizedUsers = db.newUsers.map(({ password, ...user }) => user);
+    const session = getSession(req);
+
+    let filteredUsers = db.newUsers;
+
+    if (session) {
+      if (!session.isSuperUser) {
+        filteredUsers = db.newUsers.filter(u => u.officeId === session.officeId);
+      }
+    } else {
+      // If NOT authenticated, exclude SuperAdmins/platform managers to protect tenant list privacy
+      // but retain other normal users to support selection in standard quick-login dropdown.
+      filteredUsers = db.newUsers.filter(u => !u.isSuperUser && u.role !== "SuperAdmin" && u.role !== "مدير المنصة والاشتراكات");
+    }
+
+    const sanitizedUsers = filteredUsers.map(({ password, ...user }) => user);
     res.json({
       users: sanitizedUsers,
       notifications: db.newNotifications
@@ -247,20 +388,22 @@ async function startServer() {
     }
 
     const db = readDb();
+    const officeData = getOfficeData(db, session.officeId);
+
     res.json({
-      isInitialized: db.isInitialized || false,
-      clients: db.clients || [],
-      cases: db.cases || [],
-      sessions: db.sessions || [],
-      tasks: db.tasks || [],
-      documents: db.documents || [],
-      payments: db.payments || [],
-      expenses: db.expenses || [],
-      auditLogs: db.auditLogs || [],
-      leads: db.leads || [],
-      officeConfig: db.officeConfig || null,
-      subscription: db.subscription || null,
-      invoices: db.invoices || []
+      isInitialized: officeData.isInitialized || false,
+      clients: officeData.clients || [],
+      cases: officeData.cases || [],
+      sessions: officeData.sessions || [],
+      tasks: officeData.tasks || [],
+      documents: officeData.documents || [],
+      payments: officeData.payments || [],
+      expenses: officeData.expenses || [],
+      auditLogs: officeData.auditLogs || [],
+      leads: officeData.leads || [],
+      officeConfig: officeData.officeConfig || null,
+      subscription: officeData.subscription || null,
+      invoices: officeData.invoices || []
     });
   });
 
@@ -273,27 +416,51 @@ async function startServer() {
 
     const db = readDb();
     const body = req.body;
+    const officeId = session.officeId;
+
+    if (!db.offices) {
+      db.offices = {};
+    }
+    if (!db.offices[officeId]) {
+      db.offices[officeId] = {
+        isInitialized: false,
+        clients: [],
+        cases: [],
+        sessions: [],
+        tasks: [],
+        documents: [],
+        payments: [],
+        expenses: [],
+        auditLogs: [],
+        leads: [],
+        officeConfig: null,
+        subscription: null,
+        invoices: []
+      };
+    }
+
+    const officeData = db.offices[officeId];
 
     if (body.isFullSync) {
-      // Full database initialization or migration sync
-      db.isInitialized = true;
-      if (Array.isArray(body.clients)) db.clients = body.clients;
-      if (Array.isArray(body.cases)) db.cases = body.cases;
-      if (Array.isArray(body.sessions)) db.sessions = body.sessions;
-      if (Array.isArray(body.tasks)) db.tasks = body.tasks;
-      if (Array.isArray(body.documents)) db.documents = body.documents;
-      if (Array.isArray(body.payments)) db.payments = body.payments;
-      if (Array.isArray(body.expenses)) db.expenses = body.expenses;
-      if (Array.isArray(body.auditLogs)) db.auditLogs = body.auditLogs;
-      if (Array.isArray(body.leads)) db.leads = body.leads;
-      if (body.officeConfig) db.officeConfig = body.officeConfig;
-      if (body.subscription) db.subscription = body.subscription;
-      if (Array.isArray(body.invoices)) db.invoices = body.invoices;
+      // Full database initialization or migration sync for this specific office
+      officeData.isInitialized = true;
+      if (Array.isArray(body.clients)) officeData.clients = body.clients;
+      if (Array.isArray(body.cases)) officeData.cases = body.cases;
+      if (Array.isArray(body.sessions)) officeData.sessions = body.sessions;
+      if (Array.isArray(body.tasks)) officeData.tasks = body.tasks;
+      if (Array.isArray(body.documents)) officeData.documents = body.documents;
+      if (Array.isArray(body.payments)) officeData.payments = body.payments;
+      if (Array.isArray(body.expenses)) officeData.expenses = body.expenses;
+      if (Array.isArray(body.auditLogs)) officeData.auditLogs = body.auditLogs;
+      if (Array.isArray(body.leads)) officeData.leads = body.leads;
+      if (body.officeConfig) officeData.officeConfig = body.officeConfig;
+      if (body.subscription) officeData.subscription = body.subscription;
+      if (Array.isArray(body.invoices)) officeData.invoices = body.invoices;
 
       writeDb(db);
       return res.json({ success: true, message: "تمت مزامنة وتهيئة كامل البيانات على الخادم بنجاح" });
     } else {
-      // Individual key differential sync
+      // Individual key differential sync inside the office's namespace
       const { key, data } = body;
       const whitelist = [
         "clients", "cases", "sessions", "tasks", "documents",
@@ -305,9 +472,9 @@ async function startServer() {
         return res.status(400).json({ error: "حقل المزامنة غير صالح أو غير مصرح به" });
       }
 
-      // Update the specific whitelisted key
-      (db as any)[key] = data;
-      db.isInitialized = true; // Mark as initialized once any write occurs
+      // Update the specific whitelisted key under the office's namespace
+      (officeData as any)[key] = data;
+      officeData.isInitialized = true; // Mark as initialized once any write occurs
 
       writeDb(db);
       return res.json({ success: true, key });
@@ -388,6 +555,11 @@ async function startServer() {
         return res.status(403).json({ error: "غير مصرح: لا تملك الصلاحيات الكافية لتعديل هذا الحساب" });
       }
 
+      // Security check: cannot edit users from other offices unless SuperAdmin
+      if (!session.isSuperUser && existingUser.officeId !== session.officeId) {
+        return res.status(403).json({ error: "غير مصرح: لا يمكنك تعديل مستخدمين من مكاتب أخرى" });
+      }
+
       // Secure Whitelist fields for updates
       if (body.password) {
         existingUser.password = hashPassword(body.password);
@@ -415,11 +587,14 @@ async function startServer() {
 
       writeDb(db);
       
-      const sanitizedUsers = db.newUsers.map(({ password, ...user }) => user);
+      // Filter users to only return colleague users of the same office
+      const sanitizedUsers = db.newUsers
+        .filter(u => session.isSuperUser || u.officeId === session.officeId)
+        .map(({ password, ...user }) => user);
       return res.json({ success: true, users: sanitizedUsers });
       
     } else {
-      // 2. SELF-REGISTRATION / NEW USER flow
+      // 2. SELF-REGISTRATION / NEW USER flow (or AD-HOC team member creation by owner)
       // Block email conflicts to prevent account hijack
       const emailConflict = db.newUsers.some(u => u.email && u.email.toLowerCase() === searchEmail);
       if (emailConflict) {
@@ -434,8 +609,37 @@ async function startServer() {
         return res.status(400).json({ error: "البريد الإلكتروني غير صالح" });
       }
 
-      // Enforce safe server-side defaults:
-      // A self-registered trial starts as Owner ("صاحب المكتب"), never SuperAdmin.
+      const session = getSession(req);
+      
+      let officeId = body.id; // Default to their own ID (self registration / new office)
+      let role = "صاحب المكتب"; // Default role
+      let permissions = {
+        view: true,
+        add: true,
+        edit: true,
+        delete: true,
+        export: true,
+        viewFinancials: true
+      };
+
+      if (session) {
+        // If a logged-in user is adding a new user, they must be owner or super
+        const isOwnerOrSuper = session.isSuperUser || session.role === "صاحب المكتب" || session.role === "SuperAdmin" || session.role === "مدير المنصة والاشتراكات";
+        if (!isOwnerOrSuper) {
+          return res.status(403).json({ error: "غير مصرح: لا تملك الصلاحيات الكافية لإضافة مستخدم جديد" });
+        }
+        officeId = session.officeId;
+        role = body.role || "محامي"; // Allow role from body when created by Owner
+        permissions = body.permissions || {
+          view: true,
+          add: true,
+          edit: role !== "محام تدريب",
+          delete: role === "صاحب المكتب",
+          export: role === "صاحب المكتب",
+          viewFinancials: role === "صاحب المكتب" || role === "محاسب"
+        };
+      }
+
       const plainPassword = body.password || "1234";
       const hashedPassword = hashPassword(plainPassword);
 
@@ -444,18 +648,12 @@ async function startServer() {
         name: body.name.trim(),
         email: searchEmail,
         password: hashedPassword,
-        role: "صاحب المكتب", // Safe default role
+        role: role,
         isSuperUser: false,  // Absolutely block escalations
         isActive: true,
+        officeId: officeId,
         avatarUrl: body.avatarUrl || "",
-        permissions: {
-          view: true,
-          add: true,
-          edit: true,
-          delete: true,
-          export: true,
-          viewFinancials: true
-        },
+        permissions: permissions,
         officeName: body.officeName ? body.officeName.trim() : "مكتب ميزان للمحاماة",
         registrationDevice: body.registrationDevice || "",
         registrationLocation: body.registrationLocation || "",
@@ -465,7 +663,11 @@ async function startServer() {
       db.newUsers.push(newUser);
       writeDb(db);
 
-      const sanitizedUsers = db.newUsers.map(({ password, ...user }) => user);
+      // Filter users list to return only members of the caller's office (if logged in)
+      const targetOfficeId = session ? session.officeId : officeId;
+      const sanitizedUsers = db.newUsers
+        .filter(u => !session || session.isSuperUser || u.officeId === targetOfficeId)
+        .map(({ password, ...user }) => user);
       return res.json({ success: true, users: sanitizedUsers });
     }
   });
