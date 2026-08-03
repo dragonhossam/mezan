@@ -14,18 +14,64 @@ const DB_FILE = path.join(process.cwd(), "db.json");
 interface DbSchema {
   newUsers: any[];
   newNotifications: any[];
+  isInitialized?: boolean;
+  clients?: any[];
+  cases?: any[];
+  sessions?: any[];
+  tasks?: any[];
+  documents?: any[];
+  payments?: any[];
+  expenses?: any[];
+  auditLogs?: any[];
+  leads?: any[];
+  officeConfig?: any;
+  subscription?: any;
+  invoices?: any[];
 }
 
 function readDb(): DbSchema {
   try {
     if (fs.existsSync(DB_FILE)) {
       const content = fs.readFileSync(DB_FILE, "utf-8");
-      return JSON.parse(content);
+      const parsed = JSON.parse(content);
+      return {
+        newUsers: parsed.newUsers || [],
+        newNotifications: parsed.newNotifications || [],
+        isInitialized: parsed.isInitialized || false,
+        clients: parsed.clients || [],
+        cases: parsed.cases || [],
+        sessions: parsed.sessions || [],
+        tasks: parsed.tasks || [],
+        documents: parsed.documents || [],
+        payments: parsed.payments || [],
+        expenses: parsed.expenses || [],
+        auditLogs: parsed.auditLogs || [],
+        leads: parsed.leads || [],
+        officeConfig: parsed.officeConfig || null,
+        subscription: parsed.subscription || null,
+        invoices: parsed.invoices || []
+      };
     }
   } catch (err) {
     console.error("Error reading db.json:", err);
   }
-  return { newUsers: [], newNotifications: [] };
+  return {
+    newUsers: [],
+    newNotifications: [],
+    isInitialized: false,
+    clients: [],
+    cases: [],
+    sessions: [],
+    tasks: [],
+    documents: [],
+    payments: [],
+    expenses: [],
+    auditLogs: [],
+    leads: [],
+    officeConfig: null,
+    subscription: null,
+    invoices: []
+  };
 }
 
 function writeDb(data: DbSchema) {
@@ -191,6 +237,81 @@ async function startServer() {
       users: sanitizedUsers,
       notifications: db.newNotifications
     });
+  });
+
+  // Securely get all office data (requires valid session token)
+  app.get("/api/office-data", (req, res) => {
+    const session = getSession(req);
+    if (!session) {
+      return res.status(401).json({ error: "غير مصرح: يرجى تسجيل الدخول أولاً" });
+    }
+
+    const db = readDb();
+    res.json({
+      isInitialized: db.isInitialized || false,
+      clients: db.clients || [],
+      cases: db.cases || [],
+      sessions: db.sessions || [],
+      tasks: db.tasks || [],
+      documents: db.documents || [],
+      payments: db.payments || [],
+      expenses: db.expenses || [],
+      auditLogs: db.auditLogs || [],
+      leads: db.leads || [],
+      officeConfig: db.officeConfig || null,
+      subscription: db.subscription || null,
+      invoices: db.invoices || []
+    });
+  });
+
+  // Securely persist office data (requires valid session token)
+  app.post("/api/save-office-data", (req, res) => {
+    const session = getSession(req);
+    if (!session) {
+      return res.status(401).json({ error: "غير مصرح: يرجى تسجيل الدخول أولاً" });
+    }
+
+    const db = readDb();
+    const body = req.body;
+
+    if (body.isFullSync) {
+      // Full database initialization or migration sync
+      db.isInitialized = true;
+      if (Array.isArray(body.clients)) db.clients = body.clients;
+      if (Array.isArray(body.cases)) db.cases = body.cases;
+      if (Array.isArray(body.sessions)) db.sessions = body.sessions;
+      if (Array.isArray(body.tasks)) db.tasks = body.tasks;
+      if (Array.isArray(body.documents)) db.documents = body.documents;
+      if (Array.isArray(body.payments)) db.payments = body.payments;
+      if (Array.isArray(body.expenses)) db.expenses = body.expenses;
+      if (Array.isArray(body.auditLogs)) db.auditLogs = body.auditLogs;
+      if (Array.isArray(body.leads)) db.leads = body.leads;
+      if (body.officeConfig) db.officeConfig = body.officeConfig;
+      if (body.subscription) db.subscription = body.subscription;
+      if (Array.isArray(body.invoices)) db.invoices = body.invoices;
+
+      writeDb(db);
+      return res.json({ success: true, message: "تمت مزامنة وتهيئة كامل البيانات على الخادم بنجاح" });
+    } else {
+      // Individual key differential sync
+      const { key, data } = body;
+      const whitelist = [
+        "clients", "cases", "sessions", "tasks", "documents",
+        "payments", "expenses", "auditLogs", "leads",
+        "officeConfig", "subscription", "invoices"
+      ];
+
+      if (!key || !whitelist.includes(key)) {
+        return res.status(400).json({ error: "حقل المزامنة غير صالح أو غير مصرح به" });
+      }
+
+      // Update the specific whitelisted key
+      (db as any)[key] = data;
+      db.isInitialized = true; // Mark as initialized once any write occurs
+
+      writeDb(db);
+      return res.json({ success: true, key });
+    }
   });
 
   // Secure login endpoint

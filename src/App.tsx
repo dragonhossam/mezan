@@ -255,6 +255,10 @@ export default function App() {
   });
   const [activeEntranceToast, setActiveEntranceToast] = useState<EntranceNotification | null>(null);
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
+  
+  // Server data synchronization states
+  const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
+  const [syncStatus, setSyncStatus] = useState<"synced" | "saving" | "error">("synced");
 
   // Play audio chime on new notification
   const playNotificationChime = () => {
@@ -532,41 +536,183 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Synchronize dynamic lists with server-side database on change
+  const syncWithServer = async (key: string, data: any) => {
+    const token = localStorage.getItem("meezan_session_token");
+    if (!token || !isLoggedIn) return;
+
+    setSyncStatus("saving");
+    try {
+      const res = await fetch("/api/save-office-data", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ key, data })
+      });
+      if (res.ok) {
+        setSyncStatus("synced");
+      } else {
+        setSyncStatus("error");
+      }
+    } catch (err) {
+      console.error(`Error syncing ${key} with server:`, err);
+      setSyncStatus("error");
+    }
+  };
+
+  // Securely retrieve and boot full office data from server on login
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setIsDataLoaded(true);
+      return;
+    }
+
+    const fetchOfficeData = async () => {
+      const token = localStorage.getItem("meezan_session_token");
+      if (!token) {
+        setIsDataLoaded(true);
+        return;
+      }
+
+      setSyncStatus("saving");
+      try {
+        const res = await fetch("/api/office-data", {
+          headers: {
+            "Authorization": `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.isInitialized) {
+            // Update React states with server data
+            if (Array.isArray(data.clients)) setClients(data.clients);
+            if (Array.isArray(data.cases)) setCases(data.cases);
+            if (Array.isArray(data.sessions)) setSessions(data.sessions);
+            if (Array.isArray(data.tasks)) setTasks(data.tasks);
+            if (Array.isArray(data.documents)) setDocuments(data.documents);
+            if (Array.isArray(data.payments)) setPayments(data.payments);
+            if (Array.isArray(data.expenses)) setExpenses(data.expenses);
+            if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
+            if (Array.isArray(data.leads)) setLeads(data.leads);
+            if (data.officeConfig) setOfficeConfig(data.officeConfig);
+            if (data.subscription) setSubscription(data.subscription);
+            if (Array.isArray(data.invoices)) setInvoices(data.invoices);
+            setSyncStatus("synced");
+          } else {
+            // First time initialization - upload local datasets to server database
+            const currentState = {
+              clients,
+              cases,
+              sessions,
+              tasks,
+              documents,
+              payments,
+              expenses,
+              auditLogs,
+              leads,
+              officeConfig,
+              subscription,
+              invoices
+            };
+            const initRes = await fetch("/api/save-office-data", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+              },
+              body: JSON.stringify({ isFullSync: true, ...currentState })
+            });
+            if (initRes.ok) {
+              setSyncStatus("synced");
+            } else {
+              setSyncStatus("error");
+            }
+          }
+        } else {
+          setSyncStatus("error");
+        }
+      } catch (err) {
+        console.error("Failed to load server data:", err);
+        setSyncStatus("error");
+      } finally {
+        setIsDataLoaded(true);
+      }
+    };
+
+    fetchOfficeData();
+  }, [isLoggedIn]);
+
   useEffect(() => {
     localStorage.setItem("meezan_office_config", JSON.stringify(officeConfig));
-  }, [officeConfig]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("officeConfig", officeConfig);
+    }
+  }, [officeConfig, isDataLoaded, isLoggedIn]);
 
   useEffect(() => {
     localStorage.setItem("meezan_clients", JSON.stringify(clients));
-  }, [clients]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("clients", clients);
+    }
+  }, [clients, isDataLoaded, isLoggedIn]);
 
   useEffect(() => {
     localStorage.setItem("meezan_cases", JSON.stringify(cases));
-  }, [cases]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("cases", cases);
+    }
+  }, [cases, isDataLoaded, isLoggedIn]);
 
   useEffect(() => {
     localStorage.setItem("meezan_sessions", JSON.stringify(sessions));
-  }, [sessions]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("sessions", sessions);
+    }
+  }, [sessions, isDataLoaded, isLoggedIn]);
 
   useEffect(() => {
     localStorage.setItem("meezan_tasks", JSON.stringify(tasks));
-  }, [tasks]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("tasks", tasks);
+    }
+  }, [tasks, isDataLoaded, isLoggedIn]);
 
   useEffect(() => {
     localStorage.setItem("meezan_documents", JSON.stringify(documents));
-  }, [documents]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("documents", documents);
+    }
+  }, [documents, isDataLoaded, isLoggedIn]);
 
   useEffect(() => {
     localStorage.setItem("meezan_payments", JSON.stringify(payments));
-  }, [payments]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("payments", payments);
+    }
+  }, [payments, isDataLoaded, isLoggedIn]);
 
   useEffect(() => {
     localStorage.setItem("meezan_expenses", JSON.stringify(expenses));
-  }, [expenses]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("expenses", expenses);
+    }
+  }, [expenses, isDataLoaded, isLoggedIn]);
 
   useEffect(() => {
     localStorage.setItem("meezan_audit_logs", JSON.stringify(auditLogs));
-  }, [auditLogs]);
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("auditLogs", auditLogs);
+    }
+  }, [auditLogs, isDataLoaded, isLoggedIn]);
+
+  useEffect(() => {
+    localStorage.setItem("meezan_leads", JSON.stringify(leads));
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("leads", leads);
+    }
+  }, [leads, isDataLoaded, isLoggedIn]);
 
   // Session Entrance Notification effect on page mount
   useEffect(() => {
@@ -682,6 +828,20 @@ export default function App() {
     }
     return [];
   });
+
+  useEffect(() => {
+    localStorage.setItem("meezan_subscription", JSON.stringify(subscription));
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("subscription", subscription);
+    }
+  }, [subscription, isDataLoaded, isLoggedIn]);
+
+  useEffect(() => {
+    localStorage.setItem("meezan_invoices", JSON.stringify(invoices));
+    if (isDataLoaded && isLoggedIn) {
+      syncWithServer("invoices", invoices);
+    }
+  }, [invoices, isDataLoaded, isLoggedIn]);
 
   const handleUpdateSubscription = (newSub: UserSubscription) => {
     setSubscription(newSub);
