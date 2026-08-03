@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { User, UserRole, OfficeConfig } from "../types";
 import { comparePassword, hashPassword, validatePasswordPolicy, isWeakDefaultPassword } from "../lib/auth";
+import PasswordStrengthIndicator from "./PasswordStrengthIndicator";
 
 interface AuthViewProps {
   usersList: User[];
@@ -70,6 +71,7 @@ export default function AuthView({
   const [regEmail, setRegEmail] = useState("");
   const [regRole, setRegRole] = useState<UserRole>(UserRole.Lawyer);
   const [regPassword, setRegPassword] = useState("");
+  const [showRegPassword, setShowRegPassword] = useState(false);
   const [regError, setRegError] = useState("");
   const [regSuccess, setRegSuccess] = useState(false);
 
@@ -375,22 +377,8 @@ export default function AuthView({
                 </div>
               </div>
 
-              {/* Password policy requirements check checklist */}
-              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-2 text-right">
-                <div className="font-bold text-slate-300 mb-1">شروط قوة كلمة المرور الجديدة:</div>
-                <div className="flex items-center gap-1.5 justify-start">
-                  <div className={`w-1.5 h-1.5 rounded-full ${newResetPassword.length >= 8 ? "bg-emerald-500" : "bg-slate-600"}`} />
-                  <span>أن تتكون من 8 خانات على الأقل.</span>
-                </div>
-                <div className="flex items-center gap-1.5 justify-start">
-                  <div className={`w-1.5 h-1.5 rounded-full ${(newResetPassword && newResetPassword.toLowerCase() !== resetRequiredUser.email.toLowerCase()) ? "bg-emerald-500" : "bg-slate-600"}`} />
-                  <span>ألا تطابق البريد الإلكتروني أو اسم الحساب.</span>
-                </div>
-                <div className="flex items-center gap-1.5 justify-start">
-                  <div className={`w-1.5 h-1.5 rounded-full ${(newResetPassword && !["admin", "1234", "password"].some(weak => newResetPassword.toLowerCase().includes(weak))) ? "bg-emerald-500" : "bg-slate-600"}`} />
-                  <span>ألا تكون كلمة مرور شائعة وسهلة التخمين (مثل admin أو 1234).</span>
-                </div>
-              </div>
+              {/* Password strength indicator and policy check */}
+              <PasswordStrengthIndicator password={newResetPassword} email={resetRequiredUser.email} />
 
               {resetError && (
                 <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-400 font-bold text-right">
@@ -649,15 +637,27 @@ export default function AuthView({
                     <label className="block text-[11px] font-bold text-slate-300 mb-1">
                       كلمة المرور:
                     </label>
-                    <input
-                      type="password"
-                      value={regPassword}
-                      onChange={(e) => setRegPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full px-3 py-2.5 rounded-xl text-xs bg-slate-900 border border-slate-800 text-white outline-none focus:border-[#C5A059]"
-                    />
+                    <div className="relative">
+                      <input
+                        type={showRegPassword ? "text" : "password"}
+                        value={regPassword}
+                        onChange={(e) => setRegPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full pl-10 pr-3 py-2.5 rounded-xl text-xs bg-slate-900 border border-slate-800 text-white outline-none focus:border-[#C5A059]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowRegPassword(!showRegPassword)}
+                        className="absolute left-3 top-3 text-slate-400 hover:text-white cursor-pointer"
+                      >
+                        {showRegPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
+
+                {/* Password strength indicator and policy check */}
+                <PasswordStrengthIndicator password={regPassword} email={regEmail} />
 
                 {regError && (
                   <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold">

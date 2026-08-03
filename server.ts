@@ -133,7 +133,44 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Super Admin environmental seeding helper
+function seedSuperAdmin() {
+  const superEmail = process.env.SUPER_ADMIN_EMAIL;
+  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
+  if (!superEmail || !superPass) {
+    console.log("[SEED] SUPER_ADMIN_EMAIL or SUPER_ADMIN_INITIAL_PASSWORD env variables are not fully configured. Skipping auto-seeding.");
+    return;
+  }
+  try {
+    const db = readDb();
+    const emailLower = superEmail.trim().toLowerCase();
+    const exists = db.newUsers.some(u => u.email && u.email.toLowerCase() === emailLower);
+    if (!exists) {
+      const superUser = {
+        id: "usr-super-env",
+        name: "مدير المنصة والاشتراكات (Super Admin)",
+        email: emailLower,
+        role: "SuperAdmin",
+        password: hashPassword(superPass.trim()),
+        isSuperUser: true,
+        avatarUrl: "",
+        permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
+      };
+      db.newUsers.push(superUser);
+      writeDb(db);
+      console.log(`[SEED] Created Super Admin account for ${emailLower} successfully.`);
+    } else {
+      console.log(`[SEED] Super Admin with email ${emailLower} already exists.`);
+    }
+  } catch (err) {
+    console.error("[SEED] Error seeding super admin account:", err);
+  }
+}
+
 async function startServer() {
+  // Execute Super Admin environmental seeding on startup
+  seedSuperAdmin();
+
   const app = express();
   const PORT = 3000;
 
@@ -169,22 +206,6 @@ async function startServer() {
     if (email) {
       const searchEmail = email.trim().toLowerCase();
       targetUser = db.newUsers.find(u => u.email && u.email.toLowerCase() === searchEmail);
-      
-      // Auto-provision SuperAdmin default if completely missing
-      if (!targetUser && (searchEmail === "superuser@lawmizan.com" || searchEmail === "hossamabbas412@gmail.com")) {
-        targetUser = {
-          id: "usr-super",
-          name: "مدير المنصة والاشتراكات (Super Admin)",
-          email: searchEmail,
-          role: "SuperAdmin",
-          password: hashPassword("admin"),
-          isSuperUser: true,
-          avatarUrl: "",
-          permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
-        };
-        db.newUsers.push(targetUser);
-        writeDb(db);
-      }
     } else if (userId) {
       targetUser = db.newUsers.find(u => u.id === userId);
     }
@@ -201,8 +222,12 @@ async function startServer() {
     // Create secure session token
     const token = createSession(targetUser);
 
-    // Check for weak default passwords
-    const isWeak = password.trim() === "1234" || password.trim() === "admin" || expectedHash === "1234" || expectedHash === "admin";
+    // Check for weak default passwords or if it matches the initial env password
+    const isWeak = password.trim() === "1234" || 
+                   password.trim() === "admin" || 
+                   expectedHash === "1234" || 
+                   expectedHash === "admin" ||
+                   (process.env.SUPER_ADMIN_INITIAL_PASSWORD && password.trim() === process.env.SUPER_ADMIN_INITIAL_PASSWORD.trim());
 
     // Strip password field
     const { password: _, ...sanitizedUser } = targetUser;
