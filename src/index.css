@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Cairo", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-accent: #C5A059;
+  --color-accent-hover: #b38f4d;
+  --color-navy-dark: #0D1B2A;
+  --color-navy-light: #F4F7FA;
+  --color-slate-dark: #1E293B;
+  --color-gold: #C5A059;
+}
+
+/* Custom scrollbar to keep layout premium and smooth */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #C5A059;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b38f4d;
+}
+
+/* Global Selection styling from design */
+::selection {
+  background-color: #C5A059;
+  color: white;
+}
+
+/* Journal/Ruled Notebook paper look for daily notes and journals */
+.journal-ruled-light {
+  background-attachment: local !important;
+  background-image: linear-gradient(rgba(197, 160, 89, 0.35) 1px, transparent 1px) !important;
+  background-size: 100% var(--journal-spacing, 2.2rem) !important;
+  line-height: var(--journal-spacing, 2.2rem) !important;
+  font-size: var(--journal-font-size, 13px) !important;
+  font-weight: 500 !important;
+  padding-top: 0.4rem !important;
+}
+
+.journal-ruled-dark {
+  background-attachment: local !important;
+  background-image: linear-gradient(rgba(197, 160, 89, 0.08) 1px, transparent 1px) !important;
+  background-size: 100% var(--journal-spacing, 2.2rem) !important;
+  line-height: var(--journal-spacing, 2.2rem) !important;
+  font-size: var(--journal-font-size, 13px) !important;
+  font-weight: 500 !important;
+  padding-top: 0.4rem !important;
+}
+
+

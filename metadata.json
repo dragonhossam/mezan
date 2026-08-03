@@ -1,0 +1,8 @@
+{
+  "name": "ميزان للمحاماة",
+  "description": "منصة SaaS متكاملة لإدارة مكاتب المحاماة في جمهورية مصر العربية - إدارة القضايا والعملاء والجلسات والحسابات والمهام والأرشيف القانوني.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
