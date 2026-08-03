@@ -21,12 +21,14 @@ import {
   Briefcase
 } from "lucide-react";
 import { User, UserRole, OfficeConfig } from "../types";
+import { comparePassword, hashPassword, validatePasswordPolicy, isWeakDefaultPassword } from "../lib/auth";
 
 interface AuthViewProps {
   usersList: User[];
   officeConfig: OfficeConfig;
   onLogin: (user: User) => void;
   onRegister: (newUser: User) => void;
+  onUpdatePassword?: (userId: string, hashedPass: string) => void;
   darkMode: boolean;
 }
 
@@ -35,6 +37,7 @@ export default function AuthView({
   officeConfig,
   onLogin,
   onRegister,
+  onUpdatePassword,
   darkMode
 }: AuthViewProps) {
   const [isRegisterMode, setIsRegisterMode] = useState(() => {
@@ -70,63 +73,64 @@ export default function AuthView({
   const [regError, setRegError] = useState("");
   const [regSuccess, setRegSuccess] = useState(false);
 
+  // Forced Password Reset Flow States
+  const [resetRequiredUser, setResetRequiredUser] = useState<User | null>(null);
+  const [newResetPassword, setNewResetPassword] = useState("");
+  const [confirmResetPassword, setConfirmResetPassword] = useState("");
+  const [resetError, setResetError] = useState("");
+  const [showResetPassword, setShowResetPassword] = useState(false);
+
   // Handle Login Submit
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
 
-    if (isSuperAdminLogin) {
-      // Super Admin dedicated login check
-      const superUser = usersList.find(
-        (u) => u.isSuperUser || u.id === "usr-super" || u.role === UserRole.SuperAdmin || u.email.toLowerCase() === adminEmail.trim().toLowerCase()
-      );
+    try {
+      let body: any = {};
+      if (isSuperAdminLogin) {
+        if (!adminEmail.trim() || !adminPass.trim()) {
+          setLoginError("يرجى إدخال البريد الإلكتروني وكلمة المرور");
+          return;
+        }
+        body = { email: adminEmail.trim().toLowerCase(), password: adminPass.trim() };
+      } else {
+        if (!selectedUserId) {
+          setLoginError("يرجى تحديد حساب المحامي أولاً");
+          return;
+        }
+        body = { userId: selectedUserId, password: password.trim() };
+      }
 
-      const isEmailValid = adminEmail.trim().toLowerCase() === "superuser@lawmizan.com" || 
-                           adminEmail.trim().toLowerCase() === "hossamabbas412@gmail.com" ||
-                           (superUser && adminEmail.trim().toLowerCase() === superUser.email.toLowerCase());
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
 
-      const expectedAdminPass = superUser?.password || "admin";
-
-      if (!isEmailValid) {
-        setLoginError("البريد الإلكتروني غير مخصص لمدير المنصة");
+      if (!res.ok) {
+        const errData = await res.json();
+        setLoginError(errData.error || "اسم المستخدم أو كلمة المرور غير صحيحة");
         return;
       }
 
-      if (adminPass.trim() !== expectedAdminPass && adminPass.trim() !== "admin") {
-        setLoginError("كلمة المرور الخاصة بمدير المنصة غير صحيحة");
-        return;
+      const data = await res.json();
+      if (data.success) {
+        // Store session token in localStorage for subsequent API requests
+        if (data.token) {
+          localStorage.setItem("meezan_session_token", data.token);
+        }
+
+        if (data.resetRequired) {
+          // Pass default empty passwords on resetRequired block
+          setResetRequiredUser({ ...data.user, password: "" });
+        } else {
+          onLogin(data.user);
+        }
       }
-
-      const activeSuperUser = superUser || {
-        id: "usr-super",
-        name: "مدير المنصة والاشتراكات (Super Admin)",
-        email: adminEmail.trim() || "superuser@lawmizan.com",
-        role: UserRole.SuperAdmin,
-        password: adminPass || "admin",
-        isSuperUser: true,
-        avatarUrl: "",
-        permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
-      };
-
-      onLogin(activeSuperUser);
-      return;
+    } catch (err) {
+      console.error("Login request failed:", err);
+      setLoginError("حدث خطأ أثناء الاتصال بالخادم، يرجى التحقق من الشبكة");
     }
-
-    // Normal Lawyer / Staff Login
-    const targetUser = usersList.find((u) => u.id === selectedUserId);
-    if (!targetUser) {
-      setLoginError("يرجى تحديد حساب المحامي أولاً");
-      return;
-    }
-
-    const expectedPassword = targetUser.password || "1234";
-    if (password && password.trim() !== expectedPassword) {
-      setLoginError(`كلمة المرور غير صحيحة لحساب ${targetUser.name}`);
-      return;
-    }
-
-    // Pass authentication check
-    onLogin(targetUser);
   };
 
   // Handle Register Submit
@@ -142,8 +146,11 @@ export default function AuthView({
       setRegError("يرجى كتابة بريد إلكتروني صحيح");
       return;
     }
-    if (regPassword.length < 4) {
-      setRegError("كلمة المرور يجب أن لا تقل عن 4 خانات");
+
+    // Validate using secure password policy
+    const policyResult = validatePasswordPolicy(regPassword, regEmail);
+    if (!policyResult.isValid) {
+      setRegError(policyResult.error || "كلمة المرور غير مطابقة للسياسة الأمنية");
       return;
     }
 
@@ -161,7 +168,8 @@ export default function AuthView({
       role: regRole,
       avatarUrl: "",
       isActive: true,
-      password: regPassword,
+      // Securely hash password immediately before saving
+      password: hashPassword(regPassword),
       isSuperUser: false,
       permissions: {
         view: true,
@@ -177,6 +185,52 @@ export default function AuthView({
     setTimeout(() => {
       onRegister(newUser);
     }, 1000);
+  };
+
+  // Handle Forced Reset Password Submit
+  const handleResetPasswordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError("");
+
+    if (!resetRequiredUser) return;
+
+    if (!newResetPassword.trim() || !confirmResetPassword.trim()) {
+      setResetError("يرجى تعبئة حقول كلمة المرور الجديدة وتأكيدها");
+      return;
+    }
+
+    if (newResetPassword !== confirmResetPassword) {
+      setResetError("كلمتا المرور غير متطابقتين");
+      return;
+    }
+
+    // Check against password policy
+    const policyResult = validatePasswordPolicy(newResetPassword, resetRequiredUser.email);
+    if (!policyResult.isValid) {
+      setResetError(policyResult.error || "كلمة المرور غير صالحة");
+      return;
+    }
+
+    // Hash immediately!
+    const hashedNewPassword = hashPassword(newResetPassword);
+
+    // Call parent handler to update password in state and store
+    if (onUpdatePassword) {
+      onUpdatePassword(resetRequiredUser.id, hashedNewPassword);
+    }
+
+    // Complete login with updated credentials
+    const authenticatedUser: User = {
+      ...resetRequiredUser,
+      password: hashedNewPassword
+    };
+
+    onLogin(authenticatedUser);
+
+    // Reset local states
+    setResetRequiredUser(null);
+    setNewResetPassword("");
+    setConfirmResetPassword("");
   };
 
   return (
@@ -266,33 +320,137 @@ export default function AuthView({
         {/* Left Panel: Auth Form */}
         <div className="md:col-span-7 p-6 md:p-8 flex flex-col justify-center bg-[#0D1B2A]/50">
           
-          {/* Mode Switcher Tabs */}
-          <div className="flex bg-slate-900/80 p-1.5 rounded-2xl border border-slate-800 mb-6">
-            <button
-              onClick={() => setIsRegisterMode(false)}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                !isRegisterMode
-                  ? "bg-[#C5A059] text-slate-950 shadow-md"
-                  : "text-slate-400 hover:text-white"
-              }`}
+          {resetRequiredUser ? (
+            /* FORCED PASSWORD RESET FORM */
+            <form
+              onSubmit={handleResetPasswordSubmit}
+              className="space-y-4 text-right"
             >
-              <LogIn className="w-4 h-4" />
-              <span>تسجيل الدخول</span>
-            </button>
-            <button
-              onClick={() => setIsRegisterMode(true)}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                isRegisterMode
-                  ? "bg-[#C5A059] text-slate-950 shadow-md"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <UserPlus className="w-4 h-4" />
-              <span>ابدأ تجربتك المجانية</span>
-            </button>
-          </div>
+              <div className="bg-red-500/10 border border-red-500/30 p-4 rounded-2xl text-xs text-red-200 leading-relaxed mb-4 text-right">
+                <div className="font-bold mb-1 flex items-center justify-start gap-1.5 text-[#C5A059]">
+                  <Lock className="w-4 h-4 text-[#C5A059]" />
+                  <span>تنبيه أمني: تعيين كلمة مرور جديدة</span>
+                </div>
+                <span>
+                  الرمز السري الحالي لحسابك (<strong>{resetRequiredUser.name}</strong>) هو كلمة مرور افتراضية ضعيفة وسهلة التخمين. يرجى اختيار وتأكيد كلمة مرور جديدة قوية لمتابعة الدخول وحماية خصوصية بيانات المكتب.
+                </span>
+              </div>
 
-          <AnimatePresence mode="wait">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  كلمة المرور الجديدة:
+                </label>
+                <div className="relative">
+                  <input
+                    type={showResetPassword ? "text" : "password"}
+                    required
+                    placeholder="أدخل 8 خانات أو أكثر تشمل حروفا وأرقاما"
+                    value={newResetPassword}
+                    onChange={(e) => setNewResetPassword(e.target.value)}
+                    className="w-full pl-11 pr-4 py-3 rounded-2xl text-xs font-medium bg-slate-900 border border-slate-800 text-white placeholder-slate-500 outline-none focus:border-[#C5A059] transition-all text-right"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetPassword(!showResetPassword)}
+                    className="absolute left-3.5 top-3.5 text-slate-400 hover:text-white"
+                  >
+                    {showResetPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  تأكيد كلمة المرور الجديدة:
+                </label>
+                <div className="relative">
+                  <input
+                    type={showResetPassword ? "text" : "password"}
+                    required
+                    placeholder="أعد كتابة كلمة المرور الجديدة للتأكيد"
+                    value={confirmResetPassword}
+                    onChange={(e) => setConfirmResetPassword(e.target.value)}
+                    className="w-full pl-11 pr-4 py-3 rounded-2xl text-xs font-medium bg-slate-900 border border-slate-800 text-white placeholder-slate-500 outline-none focus:border-[#C5A059] transition-all text-right"
+                  />
+                </div>
+              </div>
+
+              {/* Password policy requirements check checklist */}
+              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-2 text-right">
+                <div className="font-bold text-slate-300 mb-1">شروط قوة كلمة المرور الجديدة:</div>
+                <div className="flex items-center gap-1.5 justify-start">
+                  <div className={`w-1.5 h-1.5 rounded-full ${newResetPassword.length >= 8 ? "bg-emerald-500" : "bg-slate-600"}`} />
+                  <span>أن تتكون من 8 خانات على الأقل.</span>
+                </div>
+                <div className="flex items-center gap-1.5 justify-start">
+                  <div className={`w-1.5 h-1.5 rounded-full ${(newResetPassword && newResetPassword.toLowerCase() !== resetRequiredUser.email.toLowerCase()) ? "bg-emerald-500" : "bg-slate-600"}`} />
+                  <span>ألا تطابق البريد الإلكتروني أو اسم الحساب.</span>
+                </div>
+                <div className="flex items-center gap-1.5 justify-start">
+                  <div className={`w-1.5 h-1.5 rounded-full ${(newResetPassword && !["admin", "1234", "password"].some(weak => newResetPassword.toLowerCase().includes(weak))) ? "bg-emerald-500" : "bg-slate-600"}`} />
+                  <span>ألا تكون كلمة مرور شائعة وسهلة التخمين (مثل admin أو 1234).</span>
+                </div>
+              </div>
+
+              {resetError && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-400 font-bold text-right">
+                  ⚠️ {resetError}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="submit"
+                  className="flex-1 py-3 px-4 rounded-xl text-xs font-bold bg-[#C5A059] text-slate-950 hover:bg-[#b08b47] hover:shadow-lg hover:shadow-amber-500/5 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>تأكيد وحفظ كلمة المرور والولوج للمكتب</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetRequiredUser(null);
+                    setNewResetPassword("");
+                    setConfirmResetPassword("");
+                    setResetError("");
+                  }}
+                  className="px-4 py-3 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          ) : (
+            <>
+              {/* Mode Switcher Tabs */}
+              <div className="flex bg-slate-900/80 p-1.5 rounded-2xl border border-slate-800 mb-6">
+                <button
+                  type="button"
+                  onClick={() => setIsRegisterMode(false)}
+                  className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    !isRegisterMode
+                      ? "bg-[#C5A059] text-slate-950 shadow-md"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>تسجيل الدخول</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRegisterMode(true)}
+                  className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    isRegisterMode
+                      ? "bg-[#C5A059] text-slate-950 shadow-md"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>ابدأ تجربتك المجانية</span>
+                </button>
+              </div>
+
+              <AnimatePresence mode="wait">
             {!isRegisterMode ? (
               /* LOGIN FORM */
               <motion.form
@@ -525,6 +683,8 @@ export default function AuthView({
               </motion.form>
             )}
           </AnimatePresence>
+        </>
+      )}
 
         </div>
 

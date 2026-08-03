@@ -63,6 +63,8 @@ import {
   Lead
 } from "./types";
 
+import { isBcryptHash, hashPassword } from "./lib/auth";
+
 export default function App() {
   // Authentication & Login State
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
@@ -436,6 +438,37 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("meezan_users_list", JSON.stringify(usersList));
   }, [usersList]);
+
+  // One-time password migration for existing users
+  useEffect(() => {
+    setUsersList((prev) => {
+      let migrated = false;
+      const updatedList = prev.map((user) => {
+        const passwordToHash = user.password || "1234";
+        if (passwordToHash && !isBcryptHash(passwordToHash)) {
+          migrated = true;
+          return {
+            ...user,
+            password: hashPassword(passwordToHash)
+          };
+        }
+        return user;
+      });
+
+      if (migrated) {
+        localStorage.setItem("meezan_users_list", JSON.stringify(updatedList));
+        // Sync migrated users with server-side database
+        updatedList.forEach((u) => {
+          fetch("/api/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(u)
+          }).catch((err) => console.error("Failed to sync migrated user with server:", err));
+        });
+      }
+      return updatedList;
+    });
+  }, []);
 
   // Synchronize users and notifications with server-side database
   useEffect(() => {
@@ -1075,6 +1108,37 @@ export default function App() {
     logActivity(`🛡️ عدل رتبة الزميل (${memberName}) إلى المسمى الجديد: ${newRole}`);
   };
 
+  // Handle Password Update securely (hashes already computed before reaching here)
+  const handleUpdatePassword = (userId: string, hashedPass: string) => {
+    setUsersList((prev) => {
+      const updated = prev.map((u) => {
+        if (u.id === userId) {
+          const updatedUser = { ...u, password: hashedPass };
+          if (currentUser && currentUser.id === userId) {
+            setCurrentUser(updatedUser);
+            localStorage.setItem("meezan_current_user", JSON.stringify(updatedUser));
+          }
+          // Sync with server-side database
+          const token = localStorage.getItem("meezan_session_token");
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (token) {
+            headers["Authorization"] = `Bearer ${token}`;
+          }
+          fetch("/api/register", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(updatedUser)
+          }).catch((err) => console.error("Failed to update user password on server:", err));
+          return updatedUser;
+        }
+        return u;
+      });
+      localStorage.setItem("meezan_users_list", JSON.stringify(updated));
+      return updated;
+    });
+    logActivity(`🔒 تم تحديث وإعادة تعيين كلمة المرور الأمنية بنجاح لحساب مستخدم`);
+  };
+
   // Logout Handler
   const handleLogout = () => {
     if (currentUser && currentUser.name) {
@@ -1430,6 +1494,7 @@ export default function App() {
         <AuthView
           usersList={usersList}
           officeConfig={officeConfig}
+          onUpdatePassword={handleUpdatePassword}
           onLogin={(user) => {
             setCurrentUser(user);
             setIsLoggedIn(true);

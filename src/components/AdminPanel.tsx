@@ -2422,29 +2422,41 @@ export default function AdminPanel({
                     <tr className={`border-b ${darkMode ? "border-slate-800 text-slate-400" : "border-slate-200 text-slate-600"}`}>
                       <th className="pb-2">اسم الحساب الافتراضي</th>
                       <th className="pb-2">البريد الإلكتروني</th>
-                      <th className="pb-2">كلمة المرور</th>
+                      <th className="pb-2 text-[#C5A059]">مستوى الأمان وحالة الحساب</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td className={`py-1.5 font-bold ${darkMode ? "text-white" : "text-slate-900"}`}>الأستاذ رئيس المكتب</td>
                       <td className="font-mono text-slate-400">owner@lawmizan.com</td>
-                      <td className="font-mono text-emerald-600 font-bold">1234</td>
+                      <td className="text-emerald-500 font-bold text-xs flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                        مجزأة ومشفرة (bcrypt)
+                      </td>
                     </tr>
                     <tr>
                       <td className={`py-1.5 font-bold ${darkMode ? "text-white" : "text-slate-900"}`}>محامي الاستشارات</td>
                       <td className="font-mono text-slate-400">lawyer@lawmizan.com</td>
-                      <td className="font-mono text-emerald-600 font-bold">1234</td>
+                      <td className="text-emerald-500 font-bold text-xs flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                        مجزأة ومشفرة (bcrypt)
+                      </td>
                     </tr>
                     <tr>
                       <td className={`py-1.5 font-bold ${darkMode ? "text-white" : "text-slate-900"}`}>أحمد عبد المجيد (السكرتارية)</td>
                       <td className="font-mono text-slate-400">sec@lawmizan.com</td>
-                      <td className="font-mono text-emerald-600 font-bold">1234</td>
+                      <td className="text-emerald-500 font-bold text-xs flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                        مجزأة ومشفرة (bcrypt)
+                      </td>
                     </tr>
                     <tr>
                       <td className={`py-1.5 font-bold ${darkMode ? "text-white" : "text-slate-900"}`}>مدير المنصة والاشتراكات</td>
                       <td className="font-mono text-slate-400">superuser@lawmizan.com</td>
-                      <td className="font-mono text-[#C5A059] font-bold">admin</td>
+                      <td className="text-amber-500 font-bold text-xs flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
+                        مجزأة ومشفرة (bcrypt)
+                      </td>
                     </tr>
                   </tbody>
                 </table>
