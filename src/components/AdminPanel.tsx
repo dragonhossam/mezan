@@ -55,7 +55,8 @@ import {
   Map,
   UserX,
   ArrowRightLeft,
-  Phone
+  Phone,
+  Crown
 } from "lucide-react";
 import {
   User,
@@ -526,6 +527,91 @@ export default function AdminPanel({
     setShowSeedConfirm(false);
   };
   
+  // Manual Subscription Request States for Super Admin
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+  const [isLoadingPendingRequests, setIsLoadingPendingRequests] = useState(false);
+  const [pendingRequestsError, setPendingRequestsError] = useState<string | null>(null);
+  const [pendingActionProcessing, setPendingActionProcessing] = useState<string | null>(null);
+
+  const fetchPendingRequests = async () => {
+    setIsLoadingPendingRequests(true);
+    setPendingRequestsError(null);
+    try {
+      const token = localStorage.getItem("meezan_token");
+      const res = await fetch("/api/subscription/pending-requests", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setPendingRequests(data.requests || []);
+      } else {
+        setPendingRequestsError(data.error || "فشل تحميل طلبات الاشتراك المعلقة.");
+      }
+    } catch (err) {
+      console.error("[FETCH PENDING ERROR]", err);
+      setPendingRequestsError("فشل الاتصال بالخادم لتحميل الطلبات.");
+    } finally {
+      setIsLoadingPendingRequests(false);
+    }
+  };
+
+  const handleApproveSubscription = async (requestId: string, status: "active" | "expired") => {
+    setPendingActionProcessing(requestId);
+    try {
+      const token = localStorage.getItem("meezan_token");
+      const res = await fetch("/api/subscription/approve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          requestId,
+          status
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        // Refresh requests
+        fetchPendingRequests();
+        
+        // Update local offices state to match
+        const req = pendingRequests.find(r => r.id === requestId);
+        if (req) {
+          setOffices(prev => prev.map(off => {
+            if (off.id === req.officeId || off.email.toLowerCase() === req.userEmail.toLowerCase()) {
+              const amount = status === "active" ? (req.billingCycle === "monthly" ? 350 : 3500) : 0;
+              return {
+                ...off,
+                status: status,
+                amountPaid: off.amountPaid + amount,
+                planId: req.planId
+              };
+            }
+            return off;
+          }));
+        }
+        
+        alert(status === "active" ? "تم تفعيل الاشتراك اليدوي بنجاح! تم تسجيل الفاتورة." : "تم إلغاء/رفض طلب الاشتراك.");
+      } else {
+        alert("فشل تحديث حالة الاشتراك: " + (data.error || "خطأ غير معروف."));
+      }
+    } catch (err) {
+      console.error("[APPROVE SUBSCRIPTION ERROR]", err);
+      alert("حدث خطأ غير متوقع أثناء الاتصال بالخادم.");
+    } finally {
+      setPendingActionProcessing(null);
+    }
+  };
+
+  useEffect(() => {
+    if (adminTab === "offices") {
+      fetchPendingRequests();
+    }
+  }, [adminTab]);
+
   // Save offices whenever they are updated
   useEffect(() => {
     localStorage.setItem("meezan_admin_offices", JSON.stringify(offices));
@@ -903,6 +989,75 @@ export default function AdminPanel({
         </div>
 
       </div>
+
+      {/* Pending Manual Subscription Requests Reviewer Panel */}
+      {pendingRequests.length > 0 && (
+        <div className={`p-6 rounded-3xl border shadow-xl ${
+          darkMode ? "bg-[#0D1B2A]/80 border-slate-800 text-white" : "bg-white border-slate-200 text-slate-800"
+        }`}>
+          <div className="flex items-center gap-2 mb-4">
+            <Crown className="w-5 h-5 text-[#C5A059] animate-pulse" />
+            <h3 className="text-sm font-black text-white">طلبات الاشتراك قيد المراجعة اليدوية ({pendingRequests.length})</h3>
+          </div>
+          <p className="text-[11px] text-slate-400 mb-4 text-right">
+            المكاتب التالية قامت بتقديم طلب اشتراك وتنتظر تأكيد الدفع اليدوي (عبر واتساب/إنستاباي/فودافون كاش). يرجى مراجعة إيصال التحويل ثم التفعيل أو الرفض.
+          </p>
+          <div className="overflow-x-auto rounded-2xl border border-slate-800/60">
+            <table className="w-full text-right text-xs" dir="rtl">
+              <thead>
+                <tr className={darkMode ? "bg-slate-900/60 text-slate-400" : "bg-slate-50 text-slate-500"}>
+                  <th className="p-3 text-right">اسم المكتب</th>
+                  <th className="p-3 text-right">المحامي / البريد</th>
+                  <th className="p-3 text-right">الباقة المطلوبة</th>
+                  <th className="p-3 text-right">نوع الدفع</th>
+                  <th className="p-3 text-right">تاريخ الطلب</th>
+                  <th className="p-3 text-left">إجراءات المدير العام</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/40">
+                {pendingRequests.map((req) => (
+                  <tr key={req.id} className={darkMode ? "hover:bg-slate-900/40" : "hover:bg-slate-50/80"}>
+                    <td className="p-3 font-bold text-[#C5A059] text-right">🏢 {req.officeName || "مكتب محاماة جديد"}</td>
+                    <td className="p-3 text-right">
+                      <div className="font-bold">{req.userName}</div>
+                      <div className="text-[10px] text-slate-500">{req.userEmail}</div>
+                    </td>
+                    <td className="p-3 text-right">
+                      <span className="px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-400 border border-purple-500/20 font-bold text-[10px]">
+                        {req.planId === "basic" ? "المحامي الفردي" : req.planId === "pro" ? "المكتب المشترك" : "النخبة والمؤسسات"}
+                      </span>
+                    </td>
+                    <td className="p-3 text-right">
+                      <span className="text-[10px] font-bold text-slate-300">
+                        {req.billingCycle === "yearly" ? "سنوي" : "شهري"}
+                      </span>
+                    </td>
+                    <td className="p-3 text-slate-400 text-[10px] text-right">{req.createdAt || "اليوم"}</td>
+                    <td className="p-3 text-left">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          disabled={pendingActionProcessing !== null}
+                          onClick={() => handleApproveSubscription(req.id, "active")}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold cursor-pointer transition-all disabled:opacity-50"
+                        >
+                          {pendingActionProcessing === req.id ? "جاري التفعيل..." : "موافقة وتفعيل ✔"}
+                        </button>
+                        <button
+                          disabled={pendingActionProcessing !== null}
+                          onClick={() => handleApproveSubscription(req.id, "expired")}
+                          className="px-3 py-1.5 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/20 rounded-lg text-[10px] font-bold cursor-pointer transition-all disabled:opacity-50"
+                        >
+                          رفض ✖
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Main Offices Table and Search Controls */}
       <div className={`p-6 rounded-3xl border shadow-xl ${

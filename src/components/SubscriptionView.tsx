@@ -26,7 +26,8 @@ import {
   PhoneCall,
   CheckCircle2,
   X,
-  Upload
+  Upload,
+  MessageSquare
 } from "lucide-react";
 import { UserSubscription, SubscriptionPlanId, SubscriptionInvoice, User } from "../types";
 
@@ -37,6 +38,7 @@ interface SubscriptionViewProps {
   invoices: SubscriptionInvoice[];
   onAddInvoice: (invoice: SubscriptionInvoice) => void;
   darkMode: boolean;
+  officeName: string;
 }
 
 export default function SubscriptionView({
@@ -45,7 +47,8 @@ export default function SubscriptionView({
   onUpdateSubscription,
   invoices,
   onAddInvoice,
-  darkMode
+  darkMode,
+  officeName
 }: SubscriptionViewProps) {
   // UI states
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlanId>("pro");
@@ -53,22 +56,8 @@ export default function SubscriptionView({
   const [showCheckout, setShowCheckout] = useState<boolean>(false);
   const [paymentMethod, setPaymentMethod] = useState<"card" | "vodafone" | "instapay">("card");
   
-  // Checkout Form states
-  const [cardNumber, setCardNumber] = useState("");
-  const [cardExpiry, setCardExpiry] = useState("");
-  const [cardCVV, setCardCVV] = useState("");
-  const [cardHolder, setCardHolder] = useState("");
-  const [instapayRef, setInstapayRef] = useState("");
-  const [vodaSender, setVodaSender] = useState("");
-  const [vodaProvider, setVodaProvider] = useState("vodafone");
-  const [screenshotUploaded, setScreenshotUploaded] = useState(false);
-  const [uploadedFileName, setUploadedFileName] = useState("");
-  
-  // Payment gateway simulation states
+  // State indicator for tracking gateway processing & polling
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showOTP, setShowOTP] = useState(false);
-  const [otpCode, setOtpCode] = useState("");
-  const [otpError, setOtpError] = useState("");
   const [paymentSuccess, setPaymentSuccess] = useState(false);
 
   // Quick sandbox helper to generate initial mock invoices if list is empty
@@ -156,106 +145,100 @@ export default function SubscriptionView({
     ? currentPlanObj?.monthlyPrice 
     : currentPlanObj?.yearlyPrice;
 
-  // Simulate Card Formatting
-  const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value.replace(/\D/g, "");
-    if (value.length > 16) value = value.slice(0, 16);
-    const formatted = value.match(/.{1,4}/g)?.join(" ") || value;
-    setCardNumber(formatted);
-  };
+  // Manual WhatsApp Subscription State
+  const [whatsappError, setWhatsappError] = useState<string | null>(null);
 
-  const handleExpiryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value.replace(/\D/g, "");
-    if (value.length > 4) value = value.slice(0, 4);
-    if (value.length >= 2) {
-      setCardExpiry(`${value.slice(0, 2)}/${value.slice(2)}`);
-    } else {
-      setCardExpiry(value);
-    }
-  };
-
-  const handleCVVChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value.replace(/\D/g, "");
-    if (value.length <= 3) setCardCVV(value);
-  };
-
-  // Trigger Checkout Start
   const handleStartSubscribe = (planId: SubscriptionPlanId) => {
     setSelectedPlan(planId);
     setShowCheckout(true);
+    setWhatsappError(null);
     setPaymentSuccess(false);
   };
 
-  // Payment process simulation
-  const handleProcessPayment = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSendWhatsAppRequest = async () => {
     setIsProcessing(true);
+    setWhatsappError(null);
 
-    if (paymentMethod === "card") {
-      // Visa simulation needs OTP challenge
-      setTimeout(() => {
-        setIsProcessing(false);
-        setShowOTP(true);
-      }, 1500);
-    } else {
-      // Vodafone cash or Instapay processes instantly as manual proof submission
-      setTimeout(() => {
-        setIsProcessing(false);
-        finalizeSubscription();
-      }, 2000);
+    try {
+      const token = localStorage.getItem("meezan_token");
+      const res = await fetch("/api/subscription/request", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          planId: selectedPlan,
+          billingCycle: billingCycle
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        // Update local React state with the "pending" subscription
+        onUpdateSubscription(data.subscription);
+        
+        // Construct the WhatsApp custom message link
+        const currentOfficeName = officeName || "مكتب المحاماة";
+        const ownerName = currentUser.name;
+        const ownerEmail = currentUser.email;
+        const planName = plans.find(p => p.id === selectedPlan)?.name || "الباقة الاحترافية";
+        const price = billingCycle === "monthly"
+          ? plans.find(p => p.id === selectedPlan)?.monthlyPrice
+          : plans.find(p => p.id === selectedPlan)?.yearlyPrice;
+        const cycleText = billingCycle === "monthly" ? "شهرياً" : "سنوياً";
+        
+        const text = `مرحبًا، أريد الاشتراك في باقة [${planName}] (${price} ج.م ${cycleText}) لمكتب [${currentOfficeName}]. الاسم: [${ownerName}]، البريد الإلكتروني: [${ownerEmail}]`;
+        const whatsappUrl = `https://wa.me/201091033943?text=${encodeURIComponent(text)}`;
+        
+        // Open WhatsApp in a new tab
+        window.open(whatsappUrl, "_blank");
+        setShowCheckout(false);
+      } else {
+        setWhatsappError(data.error || "عذراً، فشل تسجيل طلب الاشتراك على الخادم.");
+      }
+    } catch (err) {
+      console.error("[SUBSCRIPTION REQ ERROR]", err);
+      setWhatsappError("عذراً، لم نتمكن من الاتصال بالخادم لتسجيل الطلب. يرجى مراجعة الاتصال وإعادة المحاولة.");
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const handleVerifyOTP = () => {
-    if (otpCode === "1234") {
-      setShowOTP(false);
-      finalizeSubscription();
-    } else {
-      setOtpError("رمز التحقق غير صحيح، برجاء إدخال الرمز التجريبي 1234");
+  // Manual status check for the user
+  const handleCheckStatus = async () => {
+    setIsProcessing(true);
+    try {
+      const token = localStorage.getItem("meezan_token");
+      const res = await fetch("/api/subscription-status", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          onUpdateSubscription(data.subscription);
+          if (data.subscription?.status === "active") {
+            setPaymentSuccess(true);
+          }
+          // Sync invoices
+          if (Array.isArray(data.invoices)) {
+            data.invoices.forEach((inv: SubscriptionInvoice) => {
+              if (!invoices.some(existing => existing.id === inv.id)) {
+                onAddInvoice(inv);
+              }
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[STATUS CHECK ERROR]", err);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const finalizeSubscription = () => {
-    const targetPlan = plans.find(p => p.id === selectedPlan);
-    const amount = billingCycle === "monthly" ? (targetPlan?.monthlyPrice || 0) : (targetPlan?.yearlyPrice || 0);
-    
-    const newSub: UserSubscription = {
-      planId: selectedPlan,
-      status: "active",
-      trialStartDate: subscription.trialStartDate,
-      trialEndDate: subscription.trialEndDate,
-      subscriptionStartDate: new Date().toISOString().split("T")[0],
-      subscriptionEndDate: billingCycle === "monthly" 
-        ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
-        : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-      billingCycle: billingCycle,
-      paymentMethod: paymentMethod,
-      cardDetails: paymentMethod === "card" ? {
-        last4: cardNumber.replace(/\s/g, "").slice(-4) || "4242",
-        brand: cardNumber.startsWith("5") ? "ماستركارد" : "فيزا",
-        holderName: cardHolder || "المحامي المشترك"
-      } : null,
-      autoRenew: true,
-      amountPaid: amount
-    };
-
-    onUpdateSubscription(newSub);
-
-    // Create an Invoice
-    const newInvoice: SubscriptionInvoice = {
-      id: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
-      date: new Date().toISOString().split("T")[0],
-      planName: targetPlan?.name || "الباقة الاحترافية",
-      amount: amount,
-      currency: "ج.م",
-      paymentMethod: paymentMethod === "card" ? "بطاقة ائتمان" : paymentMethod === "vodafone" ? "محفظة هاتف" : "إنستاباي",
-      status: "paid"
-    };
-    onAddInvoice(newInvoice);
-
-    setPaymentSuccess(true);
-    setShowCheckout(false);
-  };
 
   // Sandbox simulation actions for review/QA
   const handleResetToTrial = () => {
@@ -419,6 +402,17 @@ export default function SubscriptionView({
                 <span className="text-lg font-black text-white">{subscription.amountPaid} ج.م</span>
                 <span className="text-[10px] text-slate-500 block mt-1">تجدد في: {subscription.subscriptionEndDate}</span>
               </div>
+            ) : subscription.status === "pending" ? (
+              <div className="space-y-1">
+                <span className="text-2xl font-black text-blue-500 block">قيد المراجعة</span>
+                <span className="text-xs text-slate-400 block">بانتظار تأكيد الدفع</span>
+                <button
+                  onClick={handleCheckStatus}
+                  className="px-3 py-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded-xl text-[10px] font-bold mt-2 cursor-pointer transition-colors"
+                >
+                  تحديث الحالة 🔄
+                </button>
+              </div>
             ) : (
               <div className="space-y-2">
                 <span className="text-2xl font-black text-rose-500 block">منتهي الصلاحية</span>
@@ -428,6 +422,37 @@ export default function SubscriptionView({
           </div>
         </div>
       </div>
+
+      {subscription.status === "pending" && (
+        <div className="p-5 bg-blue-500/10 border border-blue-500/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-blue-400">
+          <div className="flex items-center gap-4">
+            <Clock className="w-8 h-8 flex-shrink-0 animate-pulse" />
+            <div>
+              <h4 className="text-sm font-bold">طلب اشتراكك قيد المراجعة حالياً ⏳</h4>
+              <p className="text-xs mt-1 text-slate-300">
+                لقد سجلنا طلبك للاشتراك في باقة <span className="text-[#C5A059] font-bold">({plans.find(p => p.id === subscription.planId)?.name})</span>. سيتم تفعيل حسابك مباشرة بمجرد تأكيد الدفع من قبل الإدارة.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleCheckStatus}
+              className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+            >
+              تحديث الحالة 🔄
+            </button>
+            <a
+              href={`https://wa.me/201091033943?text=${encodeURIComponent(`مرحبًا، أود الاستفسار عن حالة تفعيل باقة الاشتراك الخاصة بمكتبي.`)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              متابعة عبر واتساب
+            </a>
+          </div>
+        </div>
+      )}
 
       {paymentSuccess && (
         <div className="p-5 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center gap-4 text-emerald-500 animate-bounce">
@@ -539,6 +564,11 @@ export default function SubscriptionView({
                     <ShieldCheck className="w-4 h-4" />
                     باقتك الحالية النشطة
                   </div>
+                ) : subscription.status === "pending" && subscription.planId === plan.id ? (
+                  <div className="w-full text-center py-2.5 rounded-xl text-xs font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center gap-1.5">
+                    <Clock className="w-4 h-4 animate-pulse" />
+                    طلب الاشتراك قيد المراجعة
+                  </div>
                 ) : (
                   <button
                     onClick={() => handleStartSubscribe(plan.id)}
@@ -557,19 +587,22 @@ export default function SubscriptionView({
         })}
       </div>
 
-      {/* Checkout Section Form Modal overlay (Only shows when showCheckout is true) */}
+      {/* Checkout Section Modal overlay (Only shows when showCheckout is true) */}
       {showCheckout && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0D1B2A] border border-slate-800 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden transition-all text-right animate-fade-in" dir="rtl">
+          <div className="bg-[#0D1B2A] border border-slate-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden transition-all text-right animate-fade-in" dir="rtl">
             
             {/* Header */}
             <div className="p-5 border-b border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <CreditCard className="w-5 h-5 text-[#C5A059]" />
-                <h3 className="text-base font-black text-white">إتمام الاشتراك الآمن بالجنيه المصري</h3>
+                <Crown className="w-5 h-5 text-[#C5A059]" />
+                <h3 className="text-base font-black text-white">تفاصيل طلب الاشتراك اليدوي</h3>
               </div>
               <button 
-                onClick={() => setShowCheckout(false)}
+                onClick={() => {
+                  setShowCheckout(false);
+                  setWhatsappError(null);
+                }}
                 className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -579,335 +612,75 @@ export default function SubscriptionView({
             {/* Content info */}
             <div className="p-5 bg-slate-950/40 border-b border-slate-800/60 flex items-center justify-between gap-4">
               <div>
-                <p className="text-xs font-bold text-slate-300">
-                  الباقة المختارة: <span className="text-[#C5A059]">{plans.find(p => p.id === selectedPlan)?.name}</span>
+                <p className="text-sm font-bold text-[#C5A059]">
+                  الباقة المطلوبة: {plans.find(p => p.id === selectedPlan)?.name}
                 </p>
-                <p className="text-[10px] text-slate-500 mt-1">الدورة الحسابية: {billingCycle === "yearly" ? "سنوياً" : "شهرياً"}</p>
+                <p className="text-xs text-slate-500 mt-1">الدورة الحسابية: {billingCycle === "yearly" ? "سنوياً (خصم شهرين)" : "شهرياً"}</p>
               </div>
               <div className="text-left">
-                <span className="text-xl font-black text-white">
+                <span className="text-2xl font-black text-white">
                   {billingCycle === "monthly" 
                     ? plans.find(p => p.id === selectedPlan)?.monthlyPrice 
                     : plans.find(p => p.id === selectedPlan)?.yearlyPrice}
                 </span>
-                <span className="text-[10px] text-slate-400 mr-1">ج.م</span>
+                <span className="text-xs text-slate-400 mr-1">ج.م</span>
               </div>
             </div>
 
-            {/* Form */}
-            <form onSubmit={handleProcessPayment} className="p-6 space-y-6">
-              
-              {/* Payment Type Tab Selectors */}
-              <div className="grid grid-cols-3 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod("card")}
-                  className={`p-3 rounded-2xl border text-center transition-all cursor-pointer flex flex-col items-center gap-1.5 ${
-                    paymentMethod === "card"
-                      ? "border-[#C5A059] bg-[#C5A059]/5 text-[#C5A059]"
-                      : "border-slate-800 text-slate-400 hover:text-white"
-                  }`}
-                >
-                  <CreditCard className="w-5 h-5" />
-                  <span className="text-[10px] font-bold">بطاقة ائتمانية</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod("instapay")}
-                  className={`p-3 rounded-2xl border text-center transition-all cursor-pointer flex flex-col items-center gap-1.5 ${
-                    paymentMethod === "instapay"
-                      ? "border-[#C5A059] bg-[#C5A059]/5 text-[#C5A059]"
-                      : "border-slate-800 text-slate-400 hover:text-white"
-                  }`}
-                >
-                  <QrCode className="w-5 h-5" />
-                  <span className="text-[10px] font-bold">إنستاباي (InstaPay)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod("vodafone")}
-                  className={`p-3 rounded-2xl border text-center transition-all cursor-pointer flex flex-col items-center gap-1.5 ${
-                    paymentMethod === "vodafone"
-                      ? "border-[#C5A059] bg-[#C5A059]/5 text-[#C5A059]"
-                      : "border-slate-800 text-slate-400 hover:text-white"
-                  }`}
-                >
-                  <Smartphone className="w-5 h-5" />
-                  <span className="text-[10px] font-bold">كاش (محافظ ذكية)</span>
-                </button>
+            <div className="p-6 space-y-4">
+              <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/10 text-xs text-amber-500 leading-relaxed space-y-2">
+                <p className="font-bold">⚠️ خطوات إتمام تفعيل الاشتراك:</p>
+                <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300">
+                  <li>اضغط على الزر أدناه لتسجيل طلبك قيد المراجعة في النظام.</li>
+                  <li>سيتم توجيهك تلقائياً إلى واتساب لإرسال تفاصيل مكتبك.</li>
+                  <li>بعد إرسال الرسالة، يمكنك إتمام الدفع (عبر تحويل بنكي، إنستاباي، أو فودافون كاش).</li>
+                  <li>بمجرد تأكيد الدفع من الإدارة، سيتم تفعيل باقتك مباشرة.</li>
+                </ol>
               </div>
 
-              {/* Dynamic Payment Method View */}
-              {paymentMethod === "card" && (
-                <div className="space-y-4">
-                  <div className="bg-[#1E293B]/20 p-4 rounded-2xl border border-slate-800 flex items-center gap-2 text-[11px] text-[#C5A059]">
-                    <ShieldCheck className="w-4 h-4 flex-shrink-0" />
-                    <span>مؤمن بالكامل بالاتفاق مع البنوك المصرية الكبرى. الدفع يتم مباشرة عبر الخوادم المشفرة الآمنة.</span>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="block text-[11px] font-bold text-slate-300">اسم صاحب البطاقة (الاسم المدون على الكارت)</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="HOSSAM ABBAS"
-                      value={cardHolder}
-                      onChange={(e) => setCardHolder(e.target.value.toUpperCase())}
-                      className="w-full text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-[#C5A059] uppercase tracking-wider"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="block text-[11px] font-bold text-slate-300">رقم البطاقة الائتمانية</label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        required
-                        placeholder="4242 4242 4242 4242"
-                        value={cardNumber}
-                        onChange={handleCardNumberChange}
-                        className="w-full text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-[#C5A059] tracking-widest ltr"
-                        dir="ltr"
-                      />
-                      <CreditCard className="w-4 h-4 absolute left-3 top-3 text-slate-600" />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="block text-[11px] font-bold text-slate-300">تاريخ الانتهاء</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="MM/YY"
-                        value={cardExpiry}
-                        onChange={handleExpiryChange}
-                        className="w-full text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-[#C5A059] text-center tracking-widest"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="block text-[11px] font-bold text-slate-300">رمز الأمان (CVV)</label>
-                      <input
-                        type="password"
-                        required
-                        placeholder="123"
-                        value={cardCVV}
-                        onChange={handleCVVChange}
-                        className="w-full text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-[#C5A059] text-center tracking-widest"
-                      />
-                    </div>
-                  </div>
+              {whatsappError && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400 text-center">
+                  {whatsappError}
                 </div>
               )}
 
-              {paymentMethod === "instapay" && (
-                <div className="space-y-4">
-                  <div className="p-4 bg-slate-950/50 rounded-2xl border border-slate-800 space-y-3">
-                    <h4 className="text-xs font-bold text-[#C5A059]">خطوات الدفع عبر تطبيق إنستاباي (InstaPay):</h4>
-                    <ol className="text-[11px] text-slate-300 space-y-2 list-decimal pr-4 leading-relaxed">
-                      <li>افتح تطبيق إنستاباي على هاتفك المحمول.</li>
-                      <li>قم بالتحويل إلى عنوان الدفع الخاص بالمنصة: <strong className="text-white font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800 select-all">meezan@instapay</strong></li>
-                      <li>أو امسح رمز الاستجابة السريع للشركة (QR Code).</li>
-                      <li>اكتب القيمة الدقيقة للاشتراك: <strong>{billingCycle === "monthly" ? plans.find(p => p.id === selectedPlan)?.monthlyPrice : plans.find(p => p.id === selectedPlan)?.yearlyPrice} ج.م</strong></li>
-                      <li>بعد إتمام العملية، قم بنسخ رقم مرجع المعاملة (Ref ID) والصقه في الحقل أدناه لتأكيد التحويل فوراً.</li>
-                    </ol>
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row items-center gap-4 p-3 bg-slate-950/30 border border-slate-800/80 rounded-2xl">
-                    <div className="w-24 h-24 bg-white p-1 rounded-xl flex items-center justify-center">
-                      {/* Simulated QR Code for Instapay */}
-                      <div className="text-slate-950 text-center font-bold text-[8px] space-y-1">
-                        <QrCode className="w-12 h-12 mx-auto text-[#C5A059]" />
-                        <span>Meezan Pay</span>
-                      </div>
-                    </div>
-                    <div className="space-y-1 text-right flex-1">
-                      <span className="text-[10px] text-slate-500 uppercase font-mono block">Instapay Address</span>
-                      <strong className="text-xs text-white font-mono block">meezan@instapay</strong>
-                      <span className="text-[10px] text-slate-400 block leading-relaxed mt-1">التحويل فوري ويعمل على مدار الساعة لجميع البنوك المصرية.</span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="block text-[11px] font-bold text-slate-300">رقم مرجع المعاملة من تطبيق إنستاباي (Ref Number)</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="مثال: 402839485930"
-                      value={instapayRef}
-                      onChange={(e) => setInstapayRef(e.target.value.replace(/\D/g, ""))}
-                      className="w-full text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-[#C5A059] tracking-wider"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {paymentMethod === "vodafone" && (
-                <div className="space-y-4">
-                  <div className="p-4 bg-slate-950/50 rounded-2xl border border-slate-800 space-y-3">
-                    <h4 className="text-xs font-bold text-[#C5A059]">خطوات التحويل عبر فودافون كاش ومحافظ الهواتف الذكية:</h4>
-                    <ol className="text-[11px] text-slate-300 space-y-2 list-decimal pr-4 leading-relaxed">
-                      <li>قم بتحويل قيمة الاشتراك إلى رقم محفظتنا: <strong className="text-white font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800 select-all">01012345678</strong></li>
-                      <li>التحويل مدعوم من جميع محافظ المحمول بمصر (فودافون كاش، اتصالات كاش، أورنج كاش، WE Pay، محفظة الأهلي، CIB).</li>
-                      <li>بعد التحويل بنجاح، يرجى ملء بيانات رقم الهاتف المُرسِل، وإرفاق لقطة شاشة لإيصال العملية بالأسفل لسرعة المراجعة والتفعيل التلقائي.</li>
-                    </ol>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="block text-[11px] font-bold text-slate-300">مزود خدمة المحفظة</label>
-                      <select
-                        value={vodaProvider}
-                        onChange={(e) => setVodaProvider(e.target.value)}
-                        className="w-full text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-[#C5A059]"
-                      >
-                        <option value="vodafone">فودافون كاش (Vodafone Cash)</option>
-                        <option value="etisalat">اتصالات كاش (Etisalat Cash)</option>
-                        <option value="orange">أورنج كاش (Orange Money)</option>
-                        <option value="we">وي باي (WE Pay)</option>
-                        <option value="bank">محفظة بنك مصري (CIB / NBE)</option>
-                      </select>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="block text-[11px] font-bold text-slate-300">رقم الهاتف الذي قمت بالتحويل منه</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="010XXXXXXXX"
-                        value={vodaSender}
-                        onChange={(e) => setVodaSender(e.target.value.replace(/\D/g, ""))}
-                        maxLength={11}
-                        className="w-full text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-[#C5A059] tracking-wider"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Attachment simulation */}
-                  <div className="space-y-1">
-                    <label className="block text-[11px] font-bold text-slate-300">أرفق لقطة الشاشة للتحويل (اختياري للتأكيد الفوري)</label>
-                    <div className="border border-dashed border-slate-800 rounded-2xl p-4 text-center hover:border-[#C5A059]/40 transition-colors cursor-pointer relative bg-slate-950/20">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="absolute inset-0 opacity-0 cursor-pointer"
-                        onChange={(e) => {
-                          if (e.target.files && e.target.files[0]) {
-                            setScreenshotUploaded(true);
-                            setUploadedFileName(e.target.files[0].name);
-                          }
-                        }}
-                      />
-                      <div className="space-y-2">
-                        <Upload className="w-8 h-8 mx-auto text-slate-500" />
-                        <p className="text-xs text-slate-300 font-bold">
-                          {screenshotUploaded ? `✅ تم إرفاق: ${uploadedFileName}` : "انقر لاختيار صورة إيصال التحويل أو اسحبها هنا"}
-                        </p>
-                        <p className="text-[10px] text-slate-500">الملفات المدعومة: PNG, JPG, GIF حتى 5 ميجابايت</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Submit Buttons */}
-              <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowCheckout(false)}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={isProcessing}
-                  className="px-6 py-2.5 rounded-xl text-xs font-black bg-[#C5A059] text-slate-950 hover:bg-[#B38E46] transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  {isProcessing ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      جاري فحص المعاملة...
-                    </>
-                  ) : (
-                    <>
-                      <ShieldCheck className="w-4 h-4" />
-                      تأكيد ودفع {billingCycle === "monthly" ? plans.find(p => p.id === selectedPlan)?.monthlyPrice : plans.find(p => p.id === selectedPlan)?.yearlyPrice} ج.م
-                    </>
-                  )}
-                </button>
-              </div>
-
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* OTP Challenge Simulation Modal (For Visa security) */}
-      {showOTP && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white text-slate-950 rounded-2xl w-full max-w-sm shadow-2xl p-6 text-center space-y-6 animate-scale-up" dir="rtl">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <span className="text-[10px] text-slate-400 font-bold tracking-widest">SECURE BANK PAYMENT</span>
-              <span className="text-xs font-bold text-slate-500">نظام الأمان الثنائي (3D Secure)</span>
+              <button
+                onClick={handleSendWhatsAppRequest}
+                disabled={isProcessing}
+                className="w-full py-3.5 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg hover:shadow-emerald-900/30 disabled:opacity-50"
+              >
+                {isProcessing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    جاري تسجيل الطلب وتجهيز الرابط...
+                  </>
+                ) : (
+                  <>
+                    <MessageSquare className="w-4 h-4" />
+                    تواصل معنا عبر واتساب لإتمام الاشتراك
+                  </>
+                )}
+              </button>
             </div>
 
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto text-xl font-bold">
-              🛡️
-            </div>
-
-            <div className="space-y-2">
-              <h4 className="text-sm font-black text-slate-800">تحقق الأمان المصرفي الإلكتروني</h4>
-              <p className="text-[11px] text-slate-500 leading-relaxed">
-                تم إرسال رمز تحقق مؤقت (OTP) إلى هاتفك المسجل لدى البنك لعملية الشراء لمرة واحدة بقيمة{" "}
-                <strong className="text-slate-800">
-                  {billingCycle === "monthly" 
-                    ? plans.find(p => p.id === selectedPlan)?.monthlyPrice 
-                    : plans.find(p => p.id === selectedPlan)?.yearlyPrice} ج.م
-                </strong>.
-              </p>
-              <div className="p-2 bg-slate-50 border border-slate-100 rounded-lg text-[10px] text-blue-600 font-bold mt-1">
-                💡 رمز الأمان البنكي للتأكيد الفوري: <span className="font-mono bg-blue-100 px-1.5 py-0.5 rounded">1234</span>
-              </div>
-            </div>
-
-            <div className="space-y-1 max-w-[200px] mx-auto">
-              <input
-                type="text"
-                placeholder="XXXX"
-                value={otpCode}
-                onChange={(e) => {
-                  setOtpCode(e.target.value.replace(/\D/g, ""));
-                  setOtpError("");
-                }}
-                maxLength={4}
-                className="w-full text-center text-lg font-bold bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 tracking-widest"
-              />
-              {otpError && <p className="text-[10px] text-rose-500 font-bold">{otpError}</p>}
-            </div>
-
-            <div className="flex gap-2 pt-2">
+            {/* Footer */}
+            <div className="p-4 bg-slate-950/60 border-t border-slate-800/80 flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => {
-                  setShowOTP(false);
-                  setIsProcessing(false);
+                  setShowCheckout(false);
+                  setWhatsappError(null);
                 }}
-                className="flex-1 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer"
+                className="px-5 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
               >
-                إلغاء المعاملة
-              </button>
-              <button
-                type="button"
-                onClick={handleVerifyOTP}
-                className="flex-1 py-2 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white transition-all cursor-pointer"
-              >
-                تأكيد الرمز والدفع
+                إلغاء
               </button>
             </div>
+
           </div>
         </div>
       )}
+
 
       {/* Invoice History List */}
       <div className={`p-6 rounded-3xl border ${

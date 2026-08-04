@@ -272,6 +272,7 @@ const generalLimiter = rateLimit({
   max: 100, // limit each IP to 100 requests per minute
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, default: true },
 });
 
 const registerLimiter = rateLimit({
@@ -280,6 +281,7 @@ const registerLimiter = rateLimit({
   message: { error: "لقد تجاوزت الحد الأقصى للمحاولات، يرجى المحاولة لاحقاً بعد 15 دقيقة" },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, default: true },
 });
 
 const entranceLimiter = rateLimit({
@@ -288,6 +290,7 @@ const entranceLimiter = rateLimit({
   message: { error: "لقد تجاوزت الحد الأقصى لتسجيل الحضور، الرجاء تخفيف الضغط على الخادم" },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, default: true },
 });
 
 const loginLimiter = rateLimit({
@@ -296,29 +299,26 @@ const loginLimiter = rateLimit({
   message: { error: "لقد تجاوزت الحد الأقصى لمحاولات تسجيل الدخول، يرجى المحاولة بعد 5 دقائق" },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, default: true },
 });
 
 // Super Admin environmental seeding helper
 function seedSuperAdmin() {
-  const superEmail = process.env.SUPER_ADMIN_EMAIL;
-  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
-  if (!superEmail || !superPass) {
-    console.log("[SEED] SUPER_ADMIN_EMAIL or SUPER_ADMIN_INITIAL_PASSWORD env variables are not fully configured. Skipping auto-seeding.");
-    return;
-  }
+  const superEmail = process.env.SUPER_ADMIN_EMAIL || "superuser@lawmizan.com";
+  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD || "admin";
   try {
     const db = readDb();
     const emailLower = superEmail.trim().toLowerCase();
     const exists = db.newUsers.some(u => u.email && u.email.toLowerCase() === emailLower);
     if (!exists) {
       const superUser = {
-        id: "usr-super-env",
+        id: "usr-super",
         name: "مدير المنصة والاشتراكات (Super Admin)",
         email: emailLower,
         role: "SuperAdmin",
         password: hashPassword(superPass.trim()),
         isSuperUser: true,
-        avatarUrl: "",
+        avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
         permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
       };
       db.newUsers.push(superUser);
@@ -345,6 +345,7 @@ async function startServer() {
   seedSuperAdmin();
 
   const app = express();
+  app.set("trust proxy", 1);
   const PORT = 3000;
 
   app.use(express.json());
@@ -454,7 +455,19 @@ async function startServer() {
       if (Array.isArray(body.auditLogs)) officeData.auditLogs = body.auditLogs;
       if (Array.isArray(body.leads)) officeData.leads = body.leads;
       if (body.officeConfig) officeData.officeConfig = body.officeConfig;
-      if (body.subscription) officeData.subscription = body.subscription;
+
+      // Guard subscription status when fully synced (disable backdoor bypasses)
+      if (body.subscription) {
+        const existingSub = officeData.subscription;
+        if (body.subscription.status === "active") {
+          const wasActive = existingSub && existingSub.status === "active";
+          if (!wasActive) {
+            body.subscription.status = existingSub ? existingSub.status : "trial";
+          }
+        }
+        officeData.subscription = body.subscription;
+      }
+
       if (Array.isArray(body.invoices)) officeData.invoices = body.invoices;
 
       writeDb(db);
@@ -472,6 +485,17 @@ async function startServer() {
         return res.status(400).json({ error: "حقل المزامنة غير صالح أو غير مصرح به" });
       }
 
+      // Guard subscription status when key-synced (disable backdoor bypasses)
+      if (key === "subscription") {
+        const existingSub = officeData.subscription;
+        if (data && data.status === "active") {
+          const wasActive = existingSub && existingSub.status === "active";
+          if (!wasActive) {
+            data.status = existingSub ? existingSub.status : "trial";
+          }
+        }
+      }
+
       // Update the specific whitelisted key under the office's namespace
       (officeData as any)[key] = data;
       officeData.isInitialized = true; // Mark as initialized once any write occurs
@@ -480,6 +504,228 @@ async function startServer() {
       return res.json({ success: true, key });
     }
   });
+
+  // Manual Subscription: Create Subscription Request (Status: pending / قيد المراجعة)
+  app.post("/api/subscription/request", (req, res) => {
+    const session = getSession(req);
+    if (!session) {
+      return res.status(401).json({ error: "غير مصرح: يرجى تسجيل الدخول أولاً" });
+    }
+
+    const { planId, billingCycle } = req.body;
+    if (!planId || !billingCycle) {
+      return res.status(400).json({ error: "الرجاء تحديد الباقة ودورة الفوترة المطلوبة" });
+    }
+
+    // Pricing structures matching client plans
+    const pricingTable: Record<string, { monthly: number; yearly: number; name: string }> = {
+      basic: { monthly: 150, yearly: 1500, name: "باقة المحامي الفردي" },
+      pro: { monthly: 350, yearly: 3500, name: "باقة المكتب المشترك" },
+      elite: { monthly: 800, yearly: 8000, name: "باقة النخبة والمؤسسات" }
+    };
+
+    const planInfo = pricingTable[planId];
+    if (!planInfo) {
+      return res.status(400).json({ error: "خطة الاشتراك المحددة غير صالحة" });
+    }
+
+    const price = billingCycle === "monthly" ? planInfo.monthly : planInfo.yearly;
+
+    const db = readDb();
+    const officeId = session.officeId;
+    const officeData = getOfficeData(db, officeId);
+
+    // Create the pending subscription state
+    officeData.isInitialized = true;
+    officeData.subscription = {
+      planId: planId,
+      status: "pending",
+      trialStartDate: officeData.subscription?.trialStartDate || new Date().toISOString().split("T")[0],
+      trialEndDate: officeData.subscription?.trialEndDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+      subscriptionStartDate: null,
+      subscriptionEndDate: null,
+      billingCycle: billingCycle,
+      paymentMethod: null,
+      cardDetails: null,
+      autoRenew: false,
+      amountPaid: price,
+      requestDate: new Date().toISOString()
+    };
+
+    writeDb(db);
+    console.log(`[SUBSCRIPTION REQUEST] Office ${officeId} requested Plan: ${planId}, Cycle: ${billingCycle}`);
+    
+    return res.json({ 
+      success: true, 
+      message: "تم تسجيل طلب الاشتراك بنجاح وهو قيد المراجعة حالياً",
+      subscription: officeData.subscription 
+    });
+  });
+
+  // Super-Admin: List all offices with "pending" subscription requests
+  app.get("/api/subscription/pending-requests", (req, res) => {
+    const session = getSession(req);
+    if (!session) {
+      return res.status(401).json({ error: "غير مصرح: يرجى تسجيل الدخول أولاً" });
+    }
+    if (!session.isSuperUser) {
+      return res.status(403).json({ error: "غير مصرح: هذه الصفحة مخصصة لمدير المنصة فقط" });
+    }
+
+    const db = readDb();
+    const pendingList: any[] = [];
+
+    if (db.offices) {
+      Object.keys(db.offices).forEach(officeId => {
+        const office = db.offices![officeId];
+        const sub = office.subscription;
+        if (sub && sub.status === "pending") {
+          // Find the owner user of this office to get their info
+          const owner = db.newUsers.find(u => u.officeId === officeId && !u.isSuperUser);
+          const officeName = office.officeConfig?.officeName || owner?.officeName || `مكتب ${owner?.name || officeId}`;
+          pendingList.push({
+            officeId,
+            officeName,
+            lawyerName: owner?.name || "محامي غير معروف",
+            email: owner?.email || "غير متوفر",
+            phone: office.officeConfig?.phone || owner?.phone || "غير متوفر",
+            requestedPlan: sub.planId,
+            billingCycle: sub.billingCycle,
+            amount: sub.amountPaid || 0,
+            requestDate: sub.requestDate || new Date().toISOString()
+          });
+        }
+      });
+    }
+
+    return res.json({ success: true, requests: pendingList });
+  });
+
+  // Super-Admin: Approve or Reject subscription request
+  app.post("/api/subscription/approve", (req, res) => {
+    const session = getSession(req);
+    if (!session) {
+      return res.status(401).json({ error: "غير مصرح: يرجى تسجيل الدخول أولاً" });
+    }
+    if (!session.isSuperUser) {
+      return res.status(403).json({ error: "غير مصرح: هذه العملية مخصصة لمدير المنصة فقط" });
+    }
+
+    const { officeId, planId, billingCycle, status } = req.body;
+    if (!officeId) {
+      return res.status(400).json({ error: "معرف المكتب مطلوب" });
+    }
+
+    const db = readDb();
+    if (!db.offices || !db.offices[officeId]) {
+      return res.status(404).json({ error: "المكتب المطلوب غير موجود" });
+    }
+
+    const officeData = db.offices[officeId];
+
+    if (status === "active") {
+      const pricingTable: Record<string, { monthly: number; yearly: number; name: string }> = {
+        basic: { monthly: 150, yearly: 1500, name: "باقة المحامي الفردي" },
+        pro: { monthly: 350, yearly: 3500, name: "باقة المكتب المشترك" },
+        elite: { monthly: 800, yearly: 8000, name: "باقة النخبة والمؤسسات" }
+      };
+
+      const requestedPlan = planId || officeData.subscription?.planId || "pro";
+      const requestedCycle = billingCycle || officeData.subscription?.billingCycle || "monthly";
+      const planInfo = pricingTable[requestedPlan] || pricingTable["pro"];
+      const price = requestedCycle === "monthly" ? planInfo.monthly : planInfo.yearly;
+
+      officeData.subscription = {
+        planId: requestedPlan,
+        status: "active",
+        trialStartDate: officeData.subscription?.trialStartDate || new Date().toISOString().split("T")[0],
+        trialEndDate: officeData.subscription?.trialEndDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        subscriptionStartDate: new Date().toISOString().split("T")[0],
+        subscriptionEndDate: requestedCycle === "monthly"
+          ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
+          : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        billingCycle: requestedCycle,
+        paymentMethod: "instapay", // manual/bank/instapay
+        cardDetails: null,
+        autoRenew: true,
+        amountPaid: price,
+        activatedBy: session.userId,
+        activationDate: new Date().toISOString()
+      };
+
+      // Create a verified invoice
+      if (!Array.isArray(officeData.invoices)) {
+        officeData.invoices = [];
+      }
+
+      const newInvoice = {
+        id: `INV-MANUAL-${Math.floor(100000 + Math.random() * 900000)}`,
+        date: new Date().toISOString().split("T")[0],
+        planName: planInfo.name,
+        amount: price,
+        currency: "ج.م",
+        paymentMethod: "تفعيل يدوي (تحويل / كاش)",
+        status: "paid"
+      };
+      officeData.invoices.unshift(newInvoice);
+
+      writeDb(db);
+      console.log(`[SUBSCRIPTION APPROVED] Office ${officeId} activated on Plan: ${requestedPlan}`);
+      return res.json({ success: true, message: "تم تفعيل الاشتراك بنجاح", subscription: officeData.subscription });
+    } else if (status === "rejected" || status === "expired") {
+      const existingSub = officeData.subscription;
+      officeData.subscription = {
+        planId: existingSub?.planId || "pro",
+        status: "expired",
+        trialStartDate: existingSub?.trialStartDate || new Date().toISOString().split("T")[0],
+        trialEndDate: existingSub?.trialEndDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        subscriptionStartDate: null,
+        subscriptionEndDate: null,
+        billingCycle: existingSub?.billingCycle || "monthly",
+        paymentMethod: null,
+        cardDetails: null,
+        autoRenew: false,
+        amountPaid: 0,
+        requestDate: null
+      };
+
+      writeDb(db);
+      console.log(`[SUBSCRIPTION REJECTED] Office ${officeId} request rejected/canceled.`);
+      return res.json({ success: true, message: "تم إلغاء/رفض طلب الاشتراك", subscription: officeData.subscription });
+    }
+
+    return res.status(400).json({ error: "حالة التحديث غير صالحة" });
+  });
+
+  // Client: Get Verified Subscription Status
+  app.get("/api/subscription-status", (req, res) => {
+    const session = getSession(req);
+    if (!session) {
+      return res.status(401).json({ error: "غير مصرح: يرجى تسجيل الدخول أولاً" });
+    }
+
+    const db = readDb();
+    const officeData = getOfficeData(db, session.officeId);
+
+    res.json({
+      success: true,
+      subscription: officeData.subscription || {
+        planId: "pro",
+        status: "trial",
+        trialStartDate: new Date().toISOString().split("T")[0],
+        trialEndDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        subscriptionStartDate: null,
+        subscriptionEndDate: null,
+        billingCycle: "monthly",
+        paymentMethod: null,
+        cardDetails: null,
+        autoRenew: false,
+        amountPaid: 0
+      },
+      invoices: officeData.invoices || []
+    });
+  });
+
 
   // Secure login endpoint
   app.post("/api/login", loginLimiter, (req, res) => {

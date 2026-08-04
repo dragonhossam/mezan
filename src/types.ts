@@ -318,7 +318,7 @@ export interface OfficeConfig {
 }
 
 export type SubscriptionPlanId = "basic" | "pro" | "elite";
-export type SubscriptionStatus = "trial" | "active" | "inactive" | "expired";
+export type SubscriptionStatus = "trial" | "active" | "inactive" | "expired" | "pending";
 
 export interface UserSubscription {
   planId: SubscriptionPlanId;

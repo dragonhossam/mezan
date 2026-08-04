@@ -1372,6 +1372,43 @@ export default function App() {
             e.paidBy === currentUser.name
         );
 
+    // If pending and not visiting subscription or admin_panel, show a gorgeous pending screen
+    if (subscription.status === "pending" && currentTab !== "subscription" && currentTab !== "admin_panel") {
+      return (
+        <div className={`flex flex-col items-center justify-center text-center py-24 px-6 space-y-6 max-w-xl mx-auto border rounded-3xl backdrop-blur-sm animate-fade-in mt-12 ${
+          darkMode 
+            ? "border-blue-500/10 bg-blue-500/5" 
+            : "border-blue-200 bg-blue-50/50"
+        }`}>
+          <div className="w-16 h-16 bg-blue-500/10 text-blue-500 rounded-2xl flex items-center justify-center text-3xl animate-pulse">
+            ⏳
+          </div>
+          <div className="space-y-2">
+            <h2 className={`text-xl font-black ${darkMode ? "text-white" : "text-slate-900"}`}>طلب الاشتراك قيد المراجعة حالياً</h2>
+            <p className={`text-xs leading-relaxed ${darkMode ? "text-slate-400" : "text-slate-600"}`}>
+              لقد سجلنا طلب اشتراكك بنجاح في باقة النظام ميزان السحابي. نحن بانتظار مراجعة الدفع والتفعيل اليدوي من قبل إدارة المنصة لتتمكن من الوصول لكافة مزايا النظام.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row items-center gap-3 w-full">
+            <button
+              onClick={() => setCurrentTab("subscription")}
+              className="w-full py-3.5 rounded-2xl text-xs font-black bg-blue-500 hover:bg-blue-600 text-white transition-all shadow-xl shadow-blue-500/10 cursor-pointer"
+            >
+              متابعة حالة الاشتراك والأسعار 💳
+            </button>
+            <a
+              href={`https://wa.me/201091033943?text=${encodeURIComponent(`مرحبًا، أود الاستفسار عن حالة تفعيل باقة الاشتراك الخاصة بمكتبي.`)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="w-full py-3.5 rounded-2xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              تواصل معنا عبر واتساب 💬
+            </a>
+          </div>
+        </div>
+      );
+    }
+
     // If expired and not visiting subscription or admin_panel, block and show elegant payment portal prompt
     if (subscription.status === "expired" && currentTab !== "subscription" && currentTab !== "admin_panel") {
       return (
@@ -1584,6 +1621,7 @@ export default function App() {
             invoices={invoices}
             onAddInvoice={handleAddInvoice}
             darkMode={darkMode}
+            officeName={officeConfig.officeName}
           />
         );
       case "admin_panel": {
