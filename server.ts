@@ -7,6 +7,29 @@ import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import crypto from "crypto";
+import multer from "multer";
+import { Storage } from "@google-cloud/storage";
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit
+});
+
+// Setup Google Cloud Storage
+let gcs: Storage;
+if (process.env.GCS_SERVICE_ACCOUNT_KEY) {
+  try {
+    const credentials = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY);
+    gcs = new Storage({ credentials });
+  } catch (err) {
+    console.warn("Could not parse GCS_SERVICE_ACCOUNT_KEY as JSON. Falling back to application default credentials.");
+    gcs = new Storage();
+  }
+} else {
+  gcs = new Storage();
+}
+
+const GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME;
 
 dotenv.config();
 
@@ -304,8 +327,12 @@ const loginLimiter = rateLimit({
 
 // Super Admin environmental seeding helper
 function seedSuperAdmin() {
-  const superEmail = process.env.SUPER_ADMIN_EMAIL || "superuser@lawmizan.com";
-  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD || "admin";
+  const superEmail = process.env.SUPER_ADMIN_EMAIL;
+  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
+  if (!superEmail || !superPass) {
+    console.log("[SEED] SUPER_ADMIN_EMAIL or SUPER_ADMIN_INITIAL_PASSWORD env variables are not fully configured. Skipping auto-seeding.");
+    return;
+  }
   try {
     const db = readDb();
     const emailLower = superEmail.trim().toLowerCase();
@@ -503,6 +530,120 @@ async function startServer() {
       writeDb(db);
       return res.json({ success: true, key });
     }
+  });
+
+  // Document Storage API: Upload
+  app.post("/api/documents/upload", upload.single("file"), async (req, res) => {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: "غير مصرح" });
+    if (!req.file) return res.status(400).json({ error: "لم يتم إرسال ملف" });
+
+    const officeId = session.officeId;
+    if (!GCS_BUCKET_NAME) {
+      return res.status(500).json({ error: "إعدادات التخزين غير متوفرة (GCS_BUCKET_NAME)" });
+    }
+
+    try {
+      const uuid = crypto.randomUUID();
+      const originalName = req.file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, "_"); // sanitize
+      const gcsPath = `offices/${officeId}/documents/${uuid}-${originalName}`;
+      
+      const bucket = gcs.bucket(GCS_BUCKET_NAME);
+      const file = bucket.file(gcsPath);
+      
+      await file.save(req.file.buffer, {
+        contentType: req.file.mimetype,
+        resumable: false
+      });
+
+      res.json({ success: true, fileReference: gcsPath });
+    } catch (err) {
+      console.error("[UPLOAD ERROR]", err);
+      res.status(500).json({ error: "فشل رفع الملف إلى التخزين السحابي" });
+    }
+  });
+
+  // Document Storage API: Download (Signed URL)
+  app.get("/api/documents/:documentId/download", async (req, res) => {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: "غير مصرح" });
+
+    const { documentId } = req.params;
+    const officeId = session.officeId;
+    const db = readDb();
+    const officeData = getOfficeData(db, officeId);
+    
+    // Check if document exists and belongs to this office
+    const documentRecord = officeData.documents?.find(d => d.id === documentId);
+    if (!documentRecord) {
+      return res.status(404).json({ error: "المستند غير موجود" });
+    }
+
+    // Security: Only allow paths under this office's namespace
+    const gcsPath = documentRecord.fileUrl;
+    if (!gcsPath || !gcsPath.startsWith(`offices/${officeId}/documents/`)) {
+      return res.status(403).json({ error: "غير مصرح بالوصول إلى هذا الملف" });
+    }
+
+    if (!GCS_BUCKET_NAME) {
+      return res.status(500).json({ error: "إعدادات التخزين غير متوفرة (GCS_BUCKET_NAME)" });
+    }
+
+    try {
+      const bucket = gcs.bucket(GCS_BUCKET_NAME);
+      const file = bucket.file(gcsPath);
+
+      // Generate a signed URL valid for 5 minutes
+      const [url] = await file.getSignedUrl({
+        version: "v4",
+        action: "read",
+        expires: Date.now() + 5 * 60 * 1000,
+      });
+
+      res.json({ success: true, url });
+    } catch (err) {
+      console.error("[DOWNLOAD ERROR]", err);
+      res.status(500).json({ error: "فشل إنشاء رابط التحميل" });
+    }
+  });
+
+  // Document Storage API: Delete
+  app.delete("/api/documents/:documentId", async (req, res) => {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: "غير مصرح" });
+
+    const { documentId } = req.params;
+    const officeId = session.officeId;
+    const db = readDb();
+    const officeData = getOfficeData(db, officeId);
+    
+    // Check if document exists
+    const docIndex = officeData.documents?.findIndex(d => d.id === documentId);
+    if (docIndex === undefined || docIndex === -1) {
+      return res.status(404).json({ error: "المستند غير موجود" });
+    }
+
+    const documentRecord = officeData.documents[docIndex];
+    const gcsPath = documentRecord.fileUrl;
+
+    if (gcsPath && gcsPath.startsWith(`offices/${officeId}/documents/`)) {
+      if (GCS_BUCKET_NAME) {
+        try {
+          const bucket = gcs.bucket(GCS_BUCKET_NAME);
+          const file = bucket.file(gcsPath);
+          await file.delete({ ignoreNotFound: true });
+        } catch (err) {
+          console.error("[DELETE FILE ERROR]", err);
+          // Continue to remove DB record even if GCS delete fails to prevent stuck states
+        }
+      }
+    }
+
+    // Remove from DB
+    officeData.documents.splice(docIndex, 1);
+    writeDb(db);
+
+    res.json({ success: true, message: "تم حذف المستند بنجاح" });
   });
 
   // Manual Subscription: Create Subscription Request (Status: pending / قيد المراجعة)

@@ -75,6 +75,28 @@ export default function DocumentsView({
   });
   
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+
+  const handleDownload = async (docId: string) => {
+    setDownloadingDocId(docId);
+    try {
+      const token = localStorage.getItem("meezan_session_token");
+      const res = await fetch(`/api/documents/${docId}/download`, {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.url) {
+        window.open(data.url, '_blank');
+      } else {
+        alert("فشل تحميل المستند: " + (data.error || "مجهول"));
+      }
+    } catch (err) {
+      console.error(err);
+      alert("خطأ في الاتصال بالخادم لتحميل المستند.");
+    } finally {
+      setDownloadingDocId(null);
+    }
+  };
 
   const handleGenerateAiNotes = async (context: string) => {
     setIsGeneratingAi(true);
@@ -117,57 +139,84 @@ export default function DocumentsView({
     return (d.title || "").toLowerCase().includes(term) || (d.fileName || "").toLowerCase().includes(term) || (d.type || "").toLowerCase().includes(term);
   });
 
-  // Simulation of file selection
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  // File selection
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setSelectedFile(file);
       const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
       setFormData({
         ...formData,
         fileName: file.name,
         fileSize: `${sizeMB} MB`
       });
+    } else {
+      setSelectedFile(null);
     }
   };
 
-  const handleStartSimulatedUpload = (e: React.FormEvent) => {
+  const handleStartRealUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.title || !formData.fileName) {
+    if (!formData.title || !formData.fileName || !selectedFile) {
       alert("الرجاء تحديد عنوان للمستند واختيار ملف قانوني للرفع.");
       return;
     }
 
     setIsUploading(true);
-    setUploadProgress(10);
+    setUploadProgress(30);
 
-    const interval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setTimeout(() => {
-            onUploadDocument(selectedCaseId, {
-              title: formData.title,
-              type: formData.type,
-              fileName: formData.fileName,
-              fileSize: formData.fileSize,
-              notes: formData.notes
-            });
-            setIsUploading(false);
-            setUploadProgress(0);
-            setIsUploadModalOpen(false);
-            setFormData({
-              title: "",
-              type: "صحيفة دعوى",
-              fileName: "",
-              fileSize: "1.2 MB",
-              notes: ""
-            });
-          }, 400);
-          return 100;
-        }
-        return prev + 15;
+    try {
+      const token = localStorage.getItem("meezan_session_token");
+      const formPayload = new FormData();
+      formPayload.append("file", selectedFile);
+      
+      const response = await fetch("/api/documents/upload", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        },
+        body: formPayload
       });
-    }, 100);
+
+      const data = await response.json();
+      setUploadProgress(80);
+
+      if (response.ok && data.success) {
+        setUploadProgress(100);
+        setTimeout(() => {
+          onUploadDocument(selectedCaseId, {
+            title: formData.title,
+            type: formData.type,
+            fileName: formData.fileName,
+            fileSize: formData.fileSize,
+            notes: formData.notes,
+            fileUrl: data.fileReference
+          });
+          setIsUploading(false);
+          setUploadProgress(0);
+          setIsUploadModalOpen(false);
+          setFormData({
+            title: "",
+            type: "صحيفة دعوى",
+            fileName: "",
+            fileSize: "1.2 MB",
+            notes: ""
+          });
+          setSelectedFile(null);
+        }, 400);
+      } else {
+        alert("خطأ في رفع الملف: " + (data.error || "مجهول"));
+        setIsUploading(false);
+        setUploadProgress(0);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("تعذر الاتصال بالخادم لرفع الملف.");
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
   };
 
   // Simulate uploading a new version (Version History test)
@@ -360,14 +409,22 @@ export default function DocumentsView({
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
-                        <a 
-                          href="#" 
-                          onClick={(e) => { e.preventDefault(); alert(`بدء تحميل الملف القانوني: ${doc.fileName}`); }}
-                          className="p-1.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 flex items-center justify-center"
+                        <button
+                          onClick={() => handleDownload(doc.id)}
+                          disabled={downloadingDocId === doc.id}
+                          className={`p-1.5 rounded flex items-center justify-center transition-colors ${
+                            downloadingDocId === doc.id 
+                              ? "bg-slate-800 text-slate-500 cursor-wait border border-slate-700"
+                              : "bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 cursor-pointer"
+                          }`}
                           title="تحميل"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                        </a>
+                          {downloadingDocId === doc.id ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Download className="w-3.5 h-3.5" />
+                          )}
+                        </button>
                         <button
                           onClick={() => handleDelete(doc.id)}
                           disabled={!canDelete}
@@ -408,7 +465,7 @@ export default function DocumentsView({
               </button>
             </div>
             
-            <form onSubmit={handleStartSimulatedUpload} className="p-5 space-y-4">
+            <form onSubmit={handleStartRealUpload} className="p-5 space-y-4">
               <div>
                 <label className="block text-xs text-slate-400 mb-1">المجلد المستهدف (رقم القضية)</label>
                 <select 
