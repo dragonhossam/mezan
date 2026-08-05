@@ -537,17 +537,22 @@ export default function AdminPanel({
     setIsLoadingPendingRequests(true);
     setPendingRequestsError(null);
     try {
-      const token = localStorage.getItem("meezan_token");
+      const token = localStorage.getItem("meezan_session_token");
       const res = await fetch("/api/subscription/pending-requests", {
         headers: {
           "Authorization": `Bearer ${token}`
         }
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setPendingRequests(data.requests || []);
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await res.json();
+        if (res.ok && data.success) {
+          setPendingRequests(data.requests || []);
+        } else {
+          setPendingRequestsError(data.error || "فشل تحميل طلبات الاشتراك المعلقة.");
+        }
       } else {
-        setPendingRequestsError(data.error || "فشل تحميل طلبات الاشتراك المعلقة.");
+        setPendingRequestsError("فشل تحميل طلبات الاشتراك المعلقة: استجابة غير صالحة من الخادم.");
       }
     } catch (err) {
       console.error("[FETCH PENDING ERROR]", err);
@@ -560,7 +565,7 @@ export default function AdminPanel({
   const handleApproveSubscription = async (requestId: string, status: "active" | "expired") => {
     setPendingActionProcessing(requestId);
     try {
-      const token = localStorage.getItem("meezan_token");
+      const token = localStorage.getItem("meezan_session_token");
       const res = await fetch("/api/subscription/approve", {
         method: "POST",
         headers: {
@@ -572,31 +577,37 @@ export default function AdminPanel({
           status
         })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        // Refresh requests
-        fetchPendingRequests();
-        
-        // Update local offices state to match
-        const req = pendingRequests.find(r => r.id === requestId);
-        if (req) {
-          setOffices(prev => prev.map(off => {
-            if (off.id === req.officeId || off.email.toLowerCase() === req.userEmail.toLowerCase()) {
-              const amount = status === "active" ? (req.billingCycle === "monthly" ? 350 : 3500) : 0;
-              return {
-                ...off,
-                status: status,
-                amountPaid: off.amountPaid + amount,
-                planId: req.planId
-              };
-            }
-            return off;
-          }));
+
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await res.json();
+        if (res.ok && data.success) {
+          // Refresh requests
+          fetchPendingRequests();
+          
+          // Update local offices state to match
+          const req = pendingRequests.find(r => r.id === requestId);
+          if (req) {
+            setOffices(prev => prev.map(off => {
+              if (off.id === req.officeId || off.email.toLowerCase() === req.userEmail.toLowerCase()) {
+                const amount = status === "active" ? (req.billingCycle === "monthly" ? 350 : 3500) : 0;
+                return {
+                  ...off,
+                  status: status,
+                  amountPaid: off.amountPaid + amount,
+                  planId: req.planId
+                };
+              }
+              return off;
+            }));
+          }
+          
+          alert(status === "active" ? "تم تفعيل الاشتراك اليدوي بنجاح! تم تسجيل الفاتورة." : "تم إلغاء/رفض طلب الاشتراك.");
+        } else {
+          alert("فشل تحديث حالة الاشتراك: " + (data.error || "خطأ غير معروف."));
         }
-        
-        alert(status === "active" ? "تم تفعيل الاشتراك اليدوي بنجاح! تم تسجيل الفاتورة." : "تم إلغاء/رفض طلب الاشتراك.");
       } else {
-        alert("فشل تحديث حالة الاشتراك: " + (data.error || "خطأ غير معروف."));
+        alert("فشل تحديث حالة الاشتراك: استجابة غير صالحة من الخادم.");
       }
     } catch (err) {
       console.error("[APPROVE SUBSCRIPTION ERROR]", err);

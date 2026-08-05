@@ -160,7 +160,7 @@ export default function SubscriptionView({
     setWhatsappError(null);
 
     try {
-      const token = localStorage.getItem("meezan_token");
+      const token = localStorage.getItem("meezan_session_token");
       const res = await fetch("/api/subscription/request", {
         method: "POST",
         headers: {
@@ -172,6 +172,11 @@ export default function SubscriptionView({
           billingCycle: billingCycle
         })
       });
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("استجابة غير صالحة من الخادم");
+      }
 
       const data = await res.json();
       if (res.ok && data.success) {
@@ -197,9 +202,9 @@ export default function SubscriptionView({
       } else {
         setWhatsappError(data.error || "عذراً، فشل تسجيل طلب الاشتراك على الخادم.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("[SUBSCRIPTION REQ ERROR]", err);
-      setWhatsappError("عذراً، لم نتمكن من الاتصال بالخادم لتسجيل الطلب. يرجى مراجعة الاتصال وإعادة المحاولة.");
+      setWhatsappError(err.message || "عذراً، لم نتمكن من الاتصال بالخادم لتسجيل الطلب. يرجى مراجعة الاتصال وإعادة المحاولة.");
     } finally {
       setIsProcessing(false);
     }
@@ -209,26 +214,29 @@ export default function SubscriptionView({
   const handleCheckStatus = async () => {
     setIsProcessing(true);
     try {
-      const token = localStorage.getItem("meezan_token");
+      const token = localStorage.getItem("meezan_session_token");
       const res = await fetch("/api/subscription-status", {
         headers: {
           "Authorization": `Bearer ${token}`
         }
       });
       if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          onUpdateSubscription(data.subscription);
-          if (data.subscription?.status === "active") {
-            setPaymentSuccess(true);
-          }
-          // Sync invoices
-          if (Array.isArray(data.invoices)) {
-            data.invoices.forEach((inv: SubscriptionInvoice) => {
-              if (!invoices.some(existing => existing.id === inv.id)) {
-                onAddInvoice(inv);
-              }
-            });
+        const contentType = res.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await res.json();
+          if (data.success) {
+            onUpdateSubscription(data.subscription);
+            if (data.subscription?.status === "active") {
+              setPaymentSuccess(true);
+            }
+            // Sync invoices
+            if (Array.isArray(data.invoices)) {
+              data.invoices.forEach((inv: SubscriptionInvoice) => {
+                if (!invoices.some(existing => existing.id === inv.id)) {
+                  onAddInvoice(inv);
+                }
+              });
+            }
           }
         }
       }

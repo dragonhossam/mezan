@@ -1,5 +1,7 @@
 import express from "express";
+import "express-async-errors";
 import path from "path";
+import fs from "fs";
 import { db } from "./src/db/index.js";
 import * as schema from "./src/db/schema.js";
 import { eq, and, notInArray, desc, sql } from "drizzle-orm";
@@ -74,7 +76,7 @@ function getSession(req: express.Request) {
   return { token, ...session };
 }
 
-const generalLimiter = rateLimit({ windowMs: 1 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false, default: true } });
+const generalLimiter = rateLimit({ windowMs: 1 * 60 * 1000, max: 100, message: { error: "Too many requests, please try again later." }, standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false, default: true } });
 const registerLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: "Limit exceeded" }, standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false, default: true } });
 const entranceLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 100, message: { error: "Limit exceeded" }, standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false, default: true } });
 const loginLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 15, message: { error: "Limit exceeded" }, standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false, default: true } });
@@ -98,20 +100,35 @@ async function syncTable(table: any, data: any[], officeId: string) {
 }
 
 async function seedSuperAdmin() {
-  const superEmail = process.env.SUPER_ADMIN_EMAIL;
-  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
-  if (!superEmail || !superPass) return;
+  const superEmail = process.env.SUPER_ADMIN_EMAIL || "superuser@lawmizan.com";
+  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD || "superuser123";
   try {
     const emailLower = superEmail.trim().toLowerCase();
     const existing = await db.select().from(schema.users).where(eq(schema.users.email, emailLower));
-    if (!existing.length) {
-      await db.insert(schema.offices).values({ id: "office-migrated-default", name: "مكتب افتراضي" }).onConflictDoNothing();
+    
+    await db.insert(schema.offices).values({ id: "office-migrated-default", name: "مكتب افتراضي" }).onConflictDoNothing();
+    
+    if (existing.length > 0) {
+      // Force update all existing accounts with this email to be SuperAdmin
+      for (const user of existing) {
+        await db.update(schema.users).set({
+          name: "مدير المنصة والاشتراكات (Super Admin)",
+          role: "SuperAdmin",
+          password: hashPassword(superPass.trim()),
+          isSuperUser: true,
+          officeId: "office-migrated-default",
+          permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
+        }).where(eq(schema.users.id, user.id));
+      }
+      console.log(`[SEED] Updated ${existing.length} existing account(s) for ${emailLower} to Super Admin successfully.`);
+    } else {
+      // Insert new super admin
       await db.insert(schema.users).values({
         id: "usr-super", name: "مدير المنصة والاشتراكات (Super Admin)", email: emailLower, role: "SuperAdmin",
         password: hashPassword(superPass.trim()), isSuperUser: true, officeId: "office-migrated-default",
         permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
       });
-      console.log(`[SEED] Created Super Admin account for ${emailLower} successfully.`);
+      console.log(`[SEED] Created new Super Admin account for ${emailLower} successfully.`);
     }
   } catch (err) {
     console.error("[SEED] Error seeding super admin account:", err);
@@ -417,8 +434,9 @@ async function startServer() {
   app.post("/api/subscription/request", async (req, res) => {
     const session = getSession(req);
     if (!session) return res.status(401).json({ error: "غير مصرح" });
-    const { officeId, planId, billingCycle } = req.body;
-    if (!officeId || officeId !== session.officeId) return res.status(403).json({ error: "غير مصرح" });
+    const { planId, billingCycle } = req.body;
+    const officeId = req.body.officeId || session.officeId;
+    if (officeId !== session.officeId && !session.isSuperUser) return res.status(403).json({ error: "غير مصرح" });
     
     const reqs = await db.select().from(schema.offices).where(eq(schema.offices.id, officeId));
     if (reqs.length) {
@@ -431,23 +449,106 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.get("/api/subscription/pending-requests", async (req, res) => {
+    const session = getSession(req);
+    if (!session || !session.isSuperUser) return res.status(403).json({ error: "غير مصرح" });
+
+    try {
+      const allOffices = await db.select().from(schema.offices);
+      const pending = [];
+      for (const off of allOffices) {
+        const sub = off.subscription as any;
+        if (sub && sub.status === "pending") {
+          const users = await db.select().from(schema.users).where(eq(schema.users.officeId, off.id));
+          const owner = users.find(u => u.role === "صاحب المكتب") || users[0] || { name: "غير معروف", email: "غير معروف" };
+          pending.push({
+            id: off.id,
+            officeId: off.id,
+            officeName: off.name,
+            userName: owner.name,
+            userEmail: owner.email,
+            planId: sub.planId,
+            billingCycle: sub.billingCycle,
+            createdAt: off.createdAt ? off.createdAt.toISOString().split("T")[0] : new Date().toISOString().split("T")[0]
+          });
+        }
+      }
+      res.json({ success: true, requests: pending });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/subscription-status", async (req, res) => {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: "غير مصرح" });
+    const oid = session.officeId;
+
+    try {
+      const officeRec = await db.select().from(schema.offices).where(eq(schema.offices.id, oid));
+      if (!officeRec.length) return res.json({ success: true, subscription: null, invoices: [] });
+
+      const o = officeRec[0];
+      const invoices = await db.select().from(schema.subscriptionInvoices).where(eq(schema.subscriptionInvoices.officeId, oid));
+      res.json({
+        success: true,
+        subscription: o.subscription,
+        invoices: invoices
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/subscription/approve", async (req, res) => {
+    const session = getSession(req);
+    if (!session || !session.isSuperUser) return res.status(403).json({ error: "غير مصرح" });
+    const { requestId, officeId, status } = req.body;
+    const targetOfficeId = requestId || officeId;
+    if (!targetOfficeId) return res.status(400).json({ error: "معرف المكتب مطلوب" });
+
+    try {
+      const existing = await db.select().from(schema.offices).where(eq(schema.offices.id, targetOfficeId));
+      if (!existing.length) return res.status(404).json({ error: "المكتب غير موجود" });
+
+      let sub: any = (existing[0].subscription as any) || {};
+      if (status === "active") {
+        sub.status = "active";
+        sub.subscriptionStartDate = new Date().toISOString().split("T")[0];
+        if (!sub.planId) sub.planId = "pro";
+        if (!sub.billingCycle) sub.billingCycle = "monthly";
+      } else {
+        sub.status = status;
+      }
+
+      await db.update(schema.offices).set({ subscription: sub }).where(eq(schema.offices.id, targetOfficeId));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/subscription/admin/approve", async (req, res) => {
     const session = getSession(req);
     if (!session || !session.isSuperUser) return res.status(403).json({ error: "غير مصرح" });
     const { officeId, planId, billingCycle, status } = req.body;
     
-    if (status === "active") {
+    try {
       const existing = await db.select().from(schema.offices).where(eq(schema.offices.id, officeId));
       if (existing.length) {
         let sub: any = (existing[0].subscription as any) || {};
-        sub.planId = planId;
-        sub.billingCycle = billingCycle;
-        sub.status = "active";
-        sub.subscriptionStartDate = new Date().toISOString().split("T")[0];
+        sub.planId = planId || sub.planId || "pro";
+        sub.billingCycle = billingCycle || sub.billingCycle || "monthly";
+        sub.status = status;
+        if (status === "active") {
+          sub.subscriptionStartDate = new Date().toISOString().split("T")[0];
+        }
         await db.update(schema.offices).set({ subscription: sub }).where(eq(schema.offices.id, officeId));
       }
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
-    res.json({ success: true });
   });
 
   app.post("/api/suggest-legal", async (req, res) => {
@@ -468,6 +569,12 @@ async function startServer() {
 
   app.post("/api/paymob/callback", async (req, res) => res.json({ success: true }));
   app.post("/api/paymob/hmac", async (req, res) => res.json({ success: true }));
+
+  // Global error handler for unhandled sync/async API errors
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Unhandled API error:", err);
+    res.status(500).json({ error: err.message || "حدث خطأ غير متوقع في الخادم" });
+  });
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
