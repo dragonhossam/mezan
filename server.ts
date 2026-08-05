@@ -99,37 +99,47 @@ async function syncTable(table: any, data: any[], officeId: string) {
   }
 }
 
+/*
+ * CRITICAL SECURITY WARNING:
+ * NEVER, UNDER ANY CIRCUMSTANCES, REINTRODUCE HARDCODED FALLBACK CREDENTIALS IN THIS SEED FUNCTION.
+ * Seeding MUST ONLY run if actual, secure environment variables (SUPER_ADMIN_EMAIL and SUPER_ADMIN_INITIAL_PASSWORD)
+ * are provided in the runtime configuration. Hardcoding default emails or passwords (like 'superuser@lawmizan.com' or 'superuser123')
+ * creates high-risk backdoors. Additionally, NEVER force-overwrite any existing user's password, role,
+ * or permissions automatically during startup, as this is destructive and insecure.
+ */
 async function seedSuperAdmin() {
-  const superEmail = process.env.SUPER_ADMIN_EMAIL || "superuser@lawmizan.com";
-  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD || "superuser123";
+  const superEmail = process.env.SUPER_ADMIN_EMAIL;
+  const superPass = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
+
+  if (!superEmail || !superPass) {
+    console.warn("[SEED] WARNING: SUPER_ADMIN_EMAIL or SUPER_ADMIN_INITIAL_PASSWORD env variable is missing. Skipping Super Admin seeding.");
+    return;
+  }
+
   try {
     const emailLower = superEmail.trim().toLowerCase();
     const existing = await db.select().from(schema.users).where(eq(schema.users.email, emailLower));
     
+    if (existing.length > 0) {
+      console.log(`[SEED] Seeding skipped. A user with email ${emailLower} already exists in the database. Existing accounts must never be overwritten on startup.`);
+      return;
+    }
+
+    // Insert default office if not present
     await db.insert(schema.offices).values({ id: "office-migrated-default", name: "مكتب افتراضي" }).onConflictDoNothing();
     
-    if (existing.length > 0) {
-      // Force update all existing accounts with this email to be SuperAdmin
-      for (const user of existing) {
-        await db.update(schema.users).set({
-          name: "مدير المنصة والاشتراكات (Super Admin)",
-          role: "SuperAdmin",
-          password: hashPassword(superPass.trim()),
-          isSuperUser: true,
-          officeId: "office-migrated-default",
-          permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
-        }).where(eq(schema.users.id, user.id));
-      }
-      console.log(`[SEED] Updated ${existing.length} existing account(s) for ${emailLower} to Super Admin successfully.`);
-    } else {
-      // Insert new super admin
-      await db.insert(schema.users).values({
-        id: "usr-super", name: "مدير المنصة والاشتراكات (Super Admin)", email: emailLower, role: "SuperAdmin",
-        password: hashPassword(superPass.trim()), isSuperUser: true, officeId: "office-migrated-default",
-        permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
-      });
-      console.log(`[SEED] Created new Super Admin account for ${emailLower} successfully.`);
-    }
+    // Insert new super admin safely
+    await db.insert(schema.users).values({
+      id: "usr-super",
+      name: "مدير المنصة والاشتراكات (Super Admin)",
+      email: emailLower,
+      role: "SuperAdmin",
+      password: hashPassword(superPass.trim()),
+      isSuperUser: true,
+      officeId: "office-migrated-default",
+      permissions: { view: true, add: true, edit: true, delete: true, export: true, viewFinancials: true }
+    });
+    console.log(`[SEED] Created new Super Admin account for ${emailLower} successfully.`);
   } catch (err) {
     console.error("[SEED] Error seeding super admin account:", err);
   }
@@ -435,8 +445,7 @@ async function startServer() {
     const session = getSession(req);
     if (!session) return res.status(401).json({ error: "غير مصرح" });
     const { planId, billingCycle } = req.body;
-    const officeId = req.body.officeId || session.officeId;
-    if (officeId !== session.officeId && !session.isSuperUser) return res.status(403).json({ error: "غير مصرح" });
+    const officeId = session.officeId;
     
     const reqs = await db.select().from(schema.offices).where(eq(schema.offices.id, officeId));
     if (reqs.length) {
