@@ -90,13 +90,29 @@ export default function DocumentsView({
       });
       const data = await res.json();
       if (res.ok && data.success && data.url) {
-        window.open(data.url, '_blank');
+        if (data.isLocal) {
+          const fileRes = await fetch(data.url, {
+            headers: { "Authorization": `Bearer ${token}` }
+          });
+          if (!fileRes.ok) throw new Error("تعذر تحميل الملف من الخادم المحلي");
+          const blob = await fileRes.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = objectUrl;
+          a.download = data.fileName || "document";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(objectUrl);
+        } else {
+          window.open(data.url, '_blank');
+        }
       } else {
         alert("فشل تحميل المستند: " + (data.error || "مجهول"));
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert("خطأ في الاتصال بالخادم لتحميل المستند.");
+      alert("خطأ في الاتصال بالخادم لتحميل المستند: " + (err.message || ""));
     } finally {
       setDownloadingDocId(null);
     }

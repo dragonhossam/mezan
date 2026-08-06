@@ -63,13 +63,37 @@ function saveSessions() {
   }
 }
 
+function cleanupExpiredSessions() {
+  const now = Date.now();
+  let deletedAny = false;
+  for (const [token, session] of activeSessions.entries()) {
+    if (now > session.expiresAt) {
+      activeSessions.delete(token);
+      deletedAny = true;
+    }
+  }
+  if (deletedAny) {
+    saveSessions();
+  }
+}
+
 function loadSessions() {
   try {
     if (fs.existsSync(SESSIONS_FILE)) {
       const content = fs.readFileSync(SESSIONS_FILE, "utf8");
       const obj = JSON.parse(content);
+      const now = Date.now();
+      let hasExpired = false;
       for (const [key, val] of Object.entries(obj)) {
-        activeSessions.set(key, val as any);
+        const session = val as any;
+        if (now <= session.expiresAt) {
+          activeSessions.set(key, session);
+        } else {
+          hasExpired = true;
+        }
+      }
+      if (hasExpired) {
+        saveSessions();
       }
     }
   } catch (e) {
@@ -79,6 +103,9 @@ function loadSessions() {
 
 // Load persisted sessions on startup
 loadSessions();
+
+// Clean up expired sessions periodically (every 10 minutes)
+setInterval(cleanupExpiredSessions, 10 * 60 * 1000);
 
 function createSession(user: any): string {
   const token = "sess_" + crypto.randomBytes(32).toString("hex") + "_" + Date.now();
@@ -184,12 +211,11 @@ async function startServer() {
   app.use(express.json());
   app.use(generalLimiter);
 
-  // Serve local uploads folder as static route
+  // Create local uploads folder safely (will NOT be served publicly)
   const uploadsDir = path.join(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
-  app.use("/uploads", express.static(uploadsDir));
 
   app.get("/api/health", async (req, res) => res.json({ status: "ok" }));
 
@@ -344,11 +370,11 @@ async function startServer() {
         
         fs.writeFileSync(localFilePath, req.file.buffer);
         
-        // Return public URL relative to the server
-        const publicUrl = `/uploads/${uniqueFileName}`;
+        // Return secure internal identifier instead of public url path
+        const secureRef = `local://${uniqueFileName}`;
         return res.json({ 
           success: true, 
-          fileReference: publicUrl, 
+          fileReference: secureRef, 
           originalName: req.file.originalname, 
           mimeType: req.file.mimetype, 
           size: req.file.size 
@@ -381,8 +407,52 @@ async function startServer() {
       if (!docs.length) return res.status(404).json({ error: "المستند غير موجود" });
       const doc = docs[0];
       if (!doc.fileUrl) return res.status(400).json({ error: "لا يوجد ملف مرفق بهذا المستند" });
-      res.json({ success: true, url: doc.fileUrl });
+      
+      const isLocal = !doc.fileUrl.startsWith("http://") && !doc.fileUrl.startsWith("https://");
+      if (isLocal) {
+        return res.json({
+          success: true,
+          isLocal: true,
+          url: `/api/documents/${doc.id}/download-local`,
+          fileName: doc.fileName || doc.title
+        });
+      }
+      
+      res.json({ success: true, url: doc.fileUrl, isLocal: false });
     } catch (err: any) { res.status(500).json({ error: "Failed to generate download URL" }); }
+  });
+
+  app.get("/api/documents/:documentId/download-local", async (req, res) => {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: "غير مصرح" });
+    try {
+      const docs = await db.select().from(schema.documents).where(and(eq(schema.documents.id, req.params.documentId), eq(schema.documents.officeId, session.officeId)));
+      if (!docs.length) return res.status(404).json({ error: "المستند غير موجود" });
+      const doc = docs[0];
+      if (!doc.fileUrl) return res.status(400).json({ error: "لا يوجد ملف مرفق بهذا المستند" });
+      
+      const isLocal = !doc.fileUrl.startsWith("http://") && !doc.fileUrl.startsWith("https://");
+      if (!isLocal) {
+        return res.status(400).json({ error: "المستند مخزن على السحابة الخارجية" });
+      }
+
+      const localFileName = doc.fileUrl.replace("local://", "").replace("/uploads/", "");
+      
+      // Prevent directory traversal
+      if (localFileName.includes("..") || localFileName.includes("/") || localFileName.includes("\\")) {
+        return res.status(400).json({ error: "اسم ملف غير صالح ومحاولة غير آمنة" });
+      }
+
+      const localFilePath = path.join(process.cwd(), "uploads", localFileName);
+      if (!fs.existsSync(localFilePath)) {
+        return res.status(404).json({ error: "الملف غير موجود على القرص المحلي" });
+      }
+
+      // Send file with proper headers securely from local disk
+      res.sendFile(localFilePath);
+    } catch (err: any) {
+      res.status(500).json({ error: "فشل تحميل الملف من الخادم المحلي" });
+    }
   });
 
   app.delete("/api/documents/:documentId", async (req, res) => {
@@ -393,8 +463,8 @@ async function startServer() {
       if (!docs.length) return res.status(404).json({ error: "المستند غير موجود" });
       const doc = docs[0];
       if (doc.fileUrl) {
-        if (doc.fileUrl.startsWith("/uploads/")) {
-          const localFileName = doc.fileUrl.replace("/uploads/", "");
+        if (doc.fileUrl.startsWith("/uploads/") || doc.fileUrl.startsWith("local://")) {
+          const localFileName = doc.fileUrl.replace("/uploads/", "").replace("local://", "");
           const localFilePath = path.join(process.cwd(), "uploads", localFileName);
           if (fs.existsSync(localFilePath)) {
             try { fs.unlinkSync(localFilePath); } catch(e) { console.error("Error deleting local file", e); }

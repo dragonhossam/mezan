@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   Briefcase, 
   Plus, 
@@ -84,6 +84,48 @@ export default function CasesView({
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [selectedDocForPreview, setSelectedDocForPreview] = useState<Document | null>(null);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+  const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrlToRevoke: string | null = null;
+
+    if (selectedDocForPreview && selectedDocForPreview.fileUrl) {
+      const isLocal = !selectedDocForPreview.fileUrl.startsWith("http://") && !selectedDocForPreview.fileUrl.startsWith("https://");
+      if (isLocal) {
+        const token = localStorage.getItem("meezan_session_token");
+        fetch(`/api/documents/${selectedDocForPreview.id}/download-local`, {
+          headers: { "Authorization": `Bearer ${token}` }
+        })
+        .then(res => {
+          if (res.ok) return res.blob();
+          throw new Error("Failed to load local file preview");
+        })
+        .then(blob => {
+          if (active) {
+            const url = URL.createObjectURL(blob);
+            objectUrlToRevoke = url;
+            setLocalPreviewUrl(url);
+          }
+        })
+        .catch(err => {
+          console.error("Local preview generation error:", err);
+          if (active) setLocalPreviewUrl(null);
+        });
+      } else {
+        setLocalPreviewUrl(null);
+      }
+    } else {
+      setLocalPreviewUrl(null);
+    }
+
+    return () => {
+      active = false;
+      if (objectUrlToRevoke) {
+        URL.revokeObjectURL(objectUrlToRevoke);
+      }
+    };
+  }, [selectedDocForPreview]);
 
   const handleDownload = async (docId: string, originalUrl?: string) => {
     setDownloadingDocId(docId);
@@ -94,18 +136,51 @@ export default function CasesView({
       });
       const data = await res.json();
       if (res.ok && data.success && data.url) {
-        window.open(data.url, '_blank');
+        if (data.isLocal) {
+          const fileRes = await fetch(data.url, {
+            headers: { "Authorization": `Bearer ${token}` }
+          });
+          if (!fileRes.ok) throw new Error("تعذر تحميل الملف من الخادم المحلي");
+          const blob = await fileRes.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = objectUrl;
+          a.download = data.fileName || "document";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(objectUrl);
+        } else {
+          window.open(data.url, '_blank');
+        }
       } else if (originalUrl) {
-        window.open(originalUrl, '_blank');
+        const isLocal = !originalUrl.startsWith("http://") && !originalUrl.startsWith("https://") && !originalUrl.startsWith("blob:");
+        if (isLocal) {
+          const fileRes = await fetch(`/api/documents/${docId}/download-local`, {
+            headers: { "Authorization": `Bearer ${token}` }
+          });
+          if (!fileRes.ok) throw new Error("تعذر تحميل الملف من الخادم المحلي");
+          const blob = await fileRes.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = objectUrl;
+          a.download = "document";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(objectUrl);
+        } else {
+          window.open(originalUrl, '_blank');
+        }
       } else {
         alert("فشل تحميل المستند أو الملف غير متوفر.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      if (originalUrl) {
+      if (originalUrl && !originalUrl.startsWith("local://")) {
         window.open(originalUrl, '_blank');
       } else {
-        alert("خطأ في الاتصال بالخادم لتحميل المستند.");
+        alert("خطأ في الاتصال بالخادم لتحميل المستند: " + (err.message || ""));
       }
     } finally {
       setDownloadingDocId(null);
@@ -1510,10 +1585,10 @@ export default function CasesView({
                   <h4 className="text-xs font-bold text-slate-400">📄 معاينة محتوى الملف</h4>
                   
                   {selectedDocForPreview.fileUrl ? (
-                    selectedDocForPreview.fileUrl.match(/\.(jpeg|jpg|gif|png|webp|svg)/i) ? (
+                    (selectedDocForPreview.fileName || selectedDocForPreview.fileUrl).match(/\.(jpeg|jpg|gif|png|webp|svg)/i) ? (
                       <div className="p-2 border border-slate-800 rounded-xl bg-slate-950/20 flex justify-center items-center overflow-hidden">
                         <img 
-                          src={selectedDocForPreview.fileUrl} 
+                          src={localPreviewUrl || selectedDocForPreview.fileUrl} 
                           alt={selectedDocForPreview.title} 
                           referrerPolicy="no-referrer" 
                           className="max-w-full max-h-[300px] object-contain rounded-lg"
@@ -1578,7 +1653,13 @@ export default function CasesView({
                           <div className="flex gap-2">
                             <button
                               type="button"
-                              onClick={() => window.open(selectedDocForPreview.fileUrl, '_blank')}
+                              onClick={() => {
+                                if (localPreviewUrl) {
+                                  window.open(localPreviewUrl, '_blank');
+                                } else {
+                                  window.open(selectedDocForPreview.fileUrl, '_blank');
+                                }
+                              }}
                               className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-2.5 py-1.5 rounded flex items-center gap-1 font-bold transition-all"
                             >
                               <ExternalLink className="w-3 h-3" />
