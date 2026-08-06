@@ -105,7 +105,7 @@ export default function EntranceToast({
                 onClose();
                 onOpenModal();
               }}
-              className="p-1.5 rounded-lg bg-[#C5A059] hover:bg-[#b08d49] text-white text-[11px] font-bold flex items-center gap-1 transition-all shadow-md cursor-pointer"
+              className="p-1.5 rounded-lg bg-[#C5A059] hover:bg-[#b08d49] text-slate-950 text-[11px] font-bold flex items-center gap-1 transition-all shadow-md cursor-pointer"
               title="عرض سجل الدخول الكامل"
             >
               <ExternalLink className="w-3.5 h-3.5" />

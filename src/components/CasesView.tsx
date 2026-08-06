@@ -23,8 +23,13 @@ import {
   Paperclip,
   CheckCircle2,
   ShieldAlert,
-  Sparkles
+  Sparkles,
+  Eye,
+  Download,
+  ExternalLink,
+  RefreshCw
 } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { 
   User as UserType, 
   Client, 
@@ -77,6 +82,35 @@ export default function CasesView({
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingCase, setEditingCase] = useState<Case | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [selectedDocForPreview, setSelectedDocForPreview] = useState<Document | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+
+  const handleDownload = async (docId: string, originalUrl?: string) => {
+    setDownloadingDocId(docId);
+    try {
+      const token = localStorage.getItem("meezan_session_token");
+      const res = await fetch(`/api/documents/${docId}/download`, {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.url) {
+        window.open(data.url, '_blank');
+      } else if (originalUrl) {
+        window.open(originalUrl, '_blank');
+      } else {
+        alert("فشل تحميل المستند أو الملف غير متوفر.");
+      }
+    } catch (err) {
+      console.error(err);
+      if (originalUrl) {
+        window.open(originalUrl, '_blank');
+      } else {
+        alert("خطأ في الاتصال بالخادم لتحميل المستند.");
+      }
+    } finally {
+      setDownloadingDocId(null);
+    }
+  };
 
   const handleGenerateAiDescription = async (context: string) => {
     setIsGeneratingAi(true);
@@ -665,13 +699,23 @@ export default function CasesView({
                     ) : (
                       <div className="space-y-2">
                         {caseDocs.map(doc => (
-                          <div key={doc.id} className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800/80 bg-slate-50 dark:bg-slate-950/40 text-right">
-                            <div className="flex items-center gap-2 text-xs font-bold truncate text-slate-300">
-                              <Paperclip className="w-3.5 h-3.5 text-amber-500" />
-                              <span className="truncate" title={doc.title}>{doc.title}</span>
+                          <div 
+                            key={doc.id} 
+                            onClick={() => setSelectedDocForPreview(doc)}
+                            className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800/80 bg-slate-50 dark:bg-slate-950/40 text-right cursor-pointer hover:bg-amber-500/5 hover:border-amber-500/40 hover:shadow-md transition-all duration-200 group"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 text-xs font-bold truncate text-slate-800 dark:text-slate-200 group-hover:text-amber-500 transition-colors">
+                                <Paperclip className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                <span className="truncate" title={doc.title}>{doc.title}</span>
+                              </div>
+                              <Eye className="w-3.5 h-3.5 text-slate-400 group-hover:text-amber-500 transition-colors shrink-0" />
                             </div>
-                            <p className="text-[10px] text-slate-400 mt-1 truncate">{doc.fileName} ({doc.fileSize})</p>
-                            <span className="text-[9px] text-amber-500/80 block mt-1 font-mono">{doc.type}</span>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 truncate">{doc.fileName} ({doc.fileSize})</p>
+                            <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-100 dark:border-slate-800/30">
+                              <span className="text-[9px] text-amber-500/80 font-mono font-bold">{doc.type}</span>
+                              <span className="text-[9px] text-slate-400 font-mono">{doc.timestamp.split(" ")[0]}</span>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1404,6 +1448,190 @@ export default function CasesView({
           </div>
         </div>
       )}
+
+      {/* Document Detail Preview Overlay Modal */}
+      <AnimatePresence>
+        {selectedDocForPreview && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
+            onClick={() => setSelectedDocForPreview(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 15, scale: 0.98 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              className={`w-full max-w-2xl rounded-2xl border shadow-xl overflow-hidden text-right my-8 ${
+                darkMode ? "bg-slate-900 border-slate-800 text-white" : "bg-white border-slate-200 text-slate-900"
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-950/20">
+                <h3 className="font-bold text-sm flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-amber-500" />
+                  معاينة محتويات وبيانات المستند
+                </h3>
+                <button onClick={() => setSelectedDocForPreview(null)} className="p-1 rounded hover:bg-slate-800 text-slate-400">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              
+              <div className="p-6 space-y-6">
+                {/* Document Overview Header Box */}
+                <div className="p-4 bg-slate-950/40 border border-slate-800 rounded-xl grid grid-cols-2 sm:grid-cols-4 gap-4 text-right">
+                  <div className="col-span-2">
+                    <span className="text-[10px] text-slate-500 block">عنوان المستند المرفق</span>
+                    <span className="text-xs font-bold text-amber-500 block truncate">{selectedDocForPreview.title}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">تصنيف الأرشفة</span>
+                    <span className="text-xs font-bold block">{selectedDocForPreview.type}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">حجم الملف</span>
+                    <span className="text-xs text-slate-300 font-mono block">{selectedDocForPreview.fileSize}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-[10px] text-slate-500 block">الاسم الحقيقي للملف</span>
+                    <span className="text-xs font-mono text-slate-300 block truncate" title={selectedDocForPreview.fileName}>{selectedDocForPreview.fileName}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-[10px] text-slate-500 block">توقيت الرفع</span>
+                    <span className="text-xs text-slate-300 font-mono block">{selectedDocForPreview.timestamp}</span>
+                  </div>
+                </div>
+
+                {/* Dynamic Simulated File Preview Container */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold text-slate-400">📄 معاينة محتوى الملف</h4>
+                  
+                  {selectedDocForPreview.fileUrl ? (
+                    selectedDocForPreview.fileUrl.match(/\.(jpeg|jpg|gif|png|webp|svg)/i) ? (
+                      <div className="p-2 border border-slate-800 rounded-xl bg-slate-950/20 flex justify-center items-center overflow-hidden">
+                        <img 
+                          src={selectedDocForPreview.fileUrl} 
+                          alt={selectedDocForPreview.title} 
+                          referrerPolicy="no-referrer" 
+                          className="max-w-full max-h-[300px] object-contain rounded-lg"
+                        />
+                      </div>
+                    ) : (
+                      // Default PDF or file preview frame
+                      <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/40 p-4">
+                        {/* Let's show a simulated premium document look */}
+                        <div className="bg-white text-slate-900 p-6 rounded-lg shadow-inner border border-amber-500/20 min-h-[220px] relative text-right flex flex-col justify-between" style={{ fontFamily: "serif" }}>
+                          <div className="border-b-2 border-double border-amber-600/30 pb-3 flex justify-between items-start text-[10px] text-slate-500">
+                            <div className="text-right leading-relaxed font-sans">
+                              <p className="font-bold text-slate-800">جمهورية مصر العربية</p>
+                              <p>مكتب ميزان للمحاماة</p>
+                              <p>والاستشارات القانونية</p>
+                            </div>
+                            <div className="text-center font-sans">
+                              <p className="text-lg font-bold text-[#C5A059] tracking-widest">⚖️ ميزان</p>
+                              <p className="text-[8px] tracking-tighter">MEEZAN LAW FIRM</p>
+                            </div>
+                            <div className="text-left leading-relaxed font-sans font-mono text-[9px]">
+                              <p>رقم القضية: {selectedCase?.caseNumber}</p>
+                              <p>المحكمة: {selectedCase?.court || "عام"}</p>
+                              <p>النوع: {selectedDocForPreview.type}</p>
+                            </div>
+                          </div>
+
+                          <div className="my-6 space-y-3">
+                            <h5 className="text-center text-sm font-bold text-amber-900 border-b border-amber-600/20 pb-1.5 font-sans" style={{ fontSize: "14px" }}>
+                              {selectedDocForPreview.title}
+                            </h5>
+                            <p className="text-[11px] text-slate-700 leading-relaxed text-justify px-2 whitespace-pre-wrap font-sans">
+                              {selectedDocForPreview.notes || `هذا المستند معنون بـ "${selectedDocForPreview.title}" وهو مدرج ضمن الحجج والمرفقات القضائية الرسمية لملف القضية رقم ${selectedCase?.caseNumber} لعام ${selectedCase?.year}. تم رفعه وأرشفته إلكترونياً بنجاح لحفظه من التلف وتسهيل الوصول إليه أثناء تداول الجلسات والمرافعة.`}
+                            </p>
+                          </div>
+
+                          <div className="border-t border-dashed border-slate-200 pt-3 flex justify-between items-end text-[9px] text-slate-400 font-sans">
+                            <div>
+                              <p>توقيع مسؤول الأرشيف:</p>
+                              <p className="font-mono text-slate-600 mt-1">✓ {selectedDocForPreview.uploadedBy || "النظام"}</p>
+                            </div>
+                            <div className="text-center relative">
+                              {/* Simulated legal stamp */}
+                              <div className="w-14 h-14 rounded-full border-4 border-double border-blue-500/30 flex flex-col items-center justify-center rotate-12 text-blue-500/40 text-[7px] font-bold">
+                                <span>مكتب ميزان</span>
+                                <span className="border-t border-blue-500/20 pt-0.5">معتمد</span>
+                              </div>
+                            </div>
+                            <div className="text-left">
+                              <p>تاريخ الأرشفة:</p>
+                              <p className="font-mono text-slate-600 mt-1">{selectedDocForPreview.timestamp}</p>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Clickable real iframe or full link option at the bottom */}
+                        <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-lg border border-slate-800">
+                          <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                            <FileText className="w-3.5 h-3.5 text-amber-500" />
+                            متوفر ملف للتصفح المباشر أو التحميل.
+                          </span>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => window.open(selectedDocForPreview.fileUrl, '_blank')}
+                              className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-2.5 py-1.5 rounded flex items-center gap-1 font-bold transition-all"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              عرض في نافذة مستقلة
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownload(selectedDocForPreview.id, selectedDocForPreview.fileUrl)}
+                              disabled={downloadingDocId === selectedDocForPreview.id}
+                              className="text-[10px] bg-amber-500 hover:bg-amber-600 text-slate-950 px-2.5 py-1.5 rounded flex items-center gap-1 font-bold transition-all disabled:opacity-50"
+                            >
+                              {downloadingDocId === selectedDocForPreview.id ? (
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Download className="w-3 h-3" />
+                              )}
+                              تحميل الملف
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    // Document with no file uploaded yet
+                    <div className="p-8 border border-dashed border-slate-800 rounded-xl bg-slate-950/20 text-center space-y-2">
+                      <FileText className="w-10 h-10 text-slate-600 mx-auto stroke-[1.2]" />
+                      <p className="text-xs text-slate-400 font-bold">لم يتم إرفاق ملف حقيقي بعد</p>
+                      <p className="text-[10px] text-slate-500 max-w-md mx-auto">
+                        هذا المستند تمت أرشفته ورقياً أو كحفظ مرجعي فقط في سجلات القضية بدون رفع ملف رقمي مصاحب له.
+                      </p>
+                      {selectedDocForPreview.notes && (
+                        <div className="mt-4 p-3 bg-amber-500/5 border border-amber-500/10 rounded-lg text-right text-xs text-slate-300">
+                          📌 <strong>ملاحظات الفهرسة:</strong> {selectedDocForPreview.notes}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Close Button */}
+                <div className="flex justify-end border-t border-slate-200 dark:border-slate-800 pt-4">
+                  <button 
+                    onClick={() => setSelectedDocForPreview(null)}
+                    className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    إغلاق المعاينة
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

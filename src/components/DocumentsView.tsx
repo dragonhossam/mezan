@@ -36,7 +36,11 @@ interface DocumentsViewProps {
   documents: Document[];
   cases: Case[];
   clients: any[];
-  onUploadDocument: (caseId: string, docData: Omit<Document, "id" | "caseId" | "versions" | "uploadedBy" | "uploadedById" | "timestamp">) => void;
+  onUploadDocument: (
+    caseId: string, 
+    docData: Omit<Document, "id" | "caseId" | "versions" | "uploadedBy" | "uploadedById" | "timestamp">,
+    file?: File | null
+  ) => Promise<boolean> | void;
   onUploadNewVersion: (docId: string, versionData: { fileName: string; fileSize: string }) => void;
   onDeleteDocument: (docId: string) => void;
   darkMode: boolean;
@@ -165,55 +169,33 @@ export default function DocumentsView({
     }
 
     setIsUploading(true);
-    setUploadProgress(30);
+    setUploadProgress(50);
 
-    try {
-      const token = localStorage.getItem("meezan_session_token");
-      const formPayload = new FormData();
-      formPayload.append("file", selectedFile);
-      
-      const response = await fetch("/api/documents/upload", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`
-        },
-        body: formPayload
-      });
+    const success = await onUploadDocument(selectedCaseId, {
+      title: formData.title,
+      type: formData.type,
+      fileName: formData.fileName,
+      fileSize: formData.fileSize,
+      notes: formData.notes,
+      fileUrl: ""
+    }, selectedFile);
 
-      const data = await response.json();
-      setUploadProgress(80);
-
-      if (response.ok && data.success) {
-        setUploadProgress(100);
-        setTimeout(() => {
-          onUploadDocument(selectedCaseId, {
-            title: formData.title,
-            type: formData.type,
-            fileName: formData.fileName,
-            fileSize: formData.fileSize,
-            notes: formData.notes,
-            fileUrl: data.fileReference
-          });
-          setIsUploading(false);
-          setUploadProgress(0);
-          setIsUploadModalOpen(false);
-          setFormData({
-            title: "",
-            type: "صحيفة دعوى",
-            fileName: "",
-            fileSize: "1.2 MB",
-            notes: ""
-          });
-          setSelectedFile(null);
-        }, 400);
-      } else {
-        alert("خطأ في رفع الملف: " + (data.error || "مجهول"));
+    if (success) {
+      setUploadProgress(100);
+      setTimeout(() => {
         setIsUploading(false);
         setUploadProgress(0);
-      }
-    } catch (err) {
-      console.error(err);
-      alert("تعذر الاتصال بالخادم لرفع الملف.");
+        setIsUploadModalOpen(false);
+        setFormData({
+          title: "",
+          type: "صحيفة دعوى",
+          fileName: "",
+          fileSize: "1.2 MB",
+          notes: ""
+        });
+        setSelectedFile(null);
+      }, 400);
+    } else {
       setIsUploading(false);
       setUploadProgress(0);
     }

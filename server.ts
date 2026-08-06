@@ -52,6 +52,34 @@ function comparePassword(password: string, hash: string): boolean {
 
 const activeSessions = new Map<string, { userId: string; officeId: string; role: string; isSuperUser: boolean; expiresAt: number; }>();
 const SESSION_DURATION = 24 * 60 * 60 * 1000;
+const SESSIONS_FILE = path.join(process.cwd(), "sessions_store.json");
+
+function saveSessions() {
+  try {
+    const obj = Object.fromEntries(activeSessions.entries());
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(obj, null, 2), "utf8");
+  } catch (e) {
+    console.error("Failed to save sessions:", e);
+  }
+}
+
+function loadSessions() {
+  try {
+    if (fs.existsSync(SESSIONS_FILE)) {
+      const content = fs.readFileSync(SESSIONS_FILE, "utf8");
+      const obj = JSON.parse(content);
+      for (const [key, val] of Object.entries(obj)) {
+        activeSessions.set(key, val as any);
+      }
+    }
+  } catch (e) {
+    console.error("Failed to load sessions:", e);
+  }
+}
+
+// Load persisted sessions on startup
+loadSessions();
+
 function createSession(user: any): string {
   const token = "sess_" + crypto.randomBytes(32).toString("hex") + "_" + Date.now();
   activeSessions.set(token, {
@@ -61,6 +89,7 @@ function createSession(user: any): string {
     isSuperUser: !!user.isSuperUser,
     expiresAt: Date.now() + SESSION_DURATION
   });
+  saveSessions();
   return token;
 }
 function getSession(req: express.Request) {
@@ -71,6 +100,7 @@ function getSession(req: express.Request) {
   if (!session) return null;
   if (Date.now() > session.expiresAt) {
     activeSessions.delete(token);
+    saveSessions();
     return null;
   }
   return { token, ...session };
@@ -153,6 +183,13 @@ async function startServer() {
 
   app.use(express.json());
   app.use(generalLimiter);
+
+  // Serve local uploads folder as static route
+  const uploadsDir = path.join(process.cwd(), "uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  app.use("/uploads", express.static(uploadsDir));
 
   app.get("/api/health", async (req, res) => res.json({ status: "ok" }));
 
@@ -294,7 +331,34 @@ async function startServer() {
     if (!session) return res.status(401).json({ error: "غير مصرح" });
     if (!req.file) return res.status(400).json({ error: "لم يتم إرسال ملف" });
     const officeId = session.officeId;
-    if (!GCS_BUCKET_NAME) return res.status(500).json({ error: "GCS Bucket not configured" });
+
+    if (!GCS_BUCKET_NAME) {
+      // Fallback to local storage
+      try {
+        const localUploadsDir = path.join(process.cwd(), "uploads");
+        if (!fs.existsSync(localUploadsDir)) {
+          fs.mkdirSync(localUploadsDir, { recursive: true });
+        }
+        const uniqueFileName = `${Date.now()}_${Math.round(Math.random() * 1e9)}_${req.file.originalname}`;
+        const localFilePath = path.join(localUploadsDir, uniqueFileName);
+        
+        fs.writeFileSync(localFilePath, req.file.buffer);
+        
+        // Return public URL relative to the server
+        const publicUrl = `/uploads/${uniqueFileName}`;
+        return res.json({ 
+          success: true, 
+          fileReference: publicUrl, 
+          originalName: req.file.originalname, 
+          mimeType: req.file.mimetype, 
+          size: req.file.size 
+        });
+      } catch (localErr: any) {
+        console.error("Local upload fallback error:", localErr);
+        return res.status(500).json({ error: "فشل حفظ الملف محلياً: " + localErr.message });
+      }
+    }
+
     try {
       const bucket = gcs.bucket(GCS_BUCKET_NAME);
       const uniqueFileName = `${officeId}/${Date.now()}_${Math.round(Math.random() * 1e9)}_${req.file.originalname}`;
@@ -328,10 +392,18 @@ async function startServer() {
       const docs = await db.select().from(schema.documents).where(and(eq(schema.documents.id, req.params.documentId), eq(schema.documents.officeId, session.officeId)));
       if (!docs.length) return res.status(404).json({ error: "المستند غير موجود" });
       const doc = docs[0];
-      if (doc.fileUrl && GCS_BUCKET_NAME) {
-        const filePathMatch = doc.fileUrl.match(/storage\.googleapis\.com\/[^\/]+\/(.+)$/);
-        if (filePathMatch && filePathMatch[1]) {
-          try { await gcs.bucket(GCS_BUCKET_NAME).file(filePathMatch[1]).delete(); } catch(e) { console.error("Error deleting from GCS", e); }
+      if (doc.fileUrl) {
+        if (doc.fileUrl.startsWith("/uploads/")) {
+          const localFileName = doc.fileUrl.replace("/uploads/", "");
+          const localFilePath = path.join(process.cwd(), "uploads", localFileName);
+          if (fs.existsSync(localFilePath)) {
+            try { fs.unlinkSync(localFilePath); } catch(e) { console.error("Error deleting local file", e); }
+          }
+        } else if (GCS_BUCKET_NAME) {
+          const filePathMatch = doc.fileUrl.match(/storage\.googleapis\.com\/[^\/]+\/(.+)$/);
+          if (filePathMatch && filePathMatch[1]) {
+            try { await gcs.bucket(GCS_BUCKET_NAME).file(filePathMatch[1]).delete(); } catch(e) { console.error("Error deleting from GCS", e); }
+          }
         }
       }
       await db.delete(schema.documents).where(eq(schema.documents.id, req.params.documentId));

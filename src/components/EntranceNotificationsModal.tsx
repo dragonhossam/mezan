@@ -163,7 +163,7 @@ export default function EntranceNotificationsModal({
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowSimForm(!showSimForm)}
-                className="px-3 py-1.5 rounded-xl bg-[#C5A059] hover:bg-[#b08d49] text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition-all cursor-pointer"
+                className="px-3 py-1.5 rounded-xl bg-[#C5A059] hover:bg-[#b08d49] text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-md transition-all cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>إضافة سجل زيارة تجريبية</span>
@@ -214,7 +214,7 @@ export default function EntranceNotificationsModal({
                     onClick={() => setSimType("simulation")}
                     className={`px-2 py-1 text-[10px] rounded-md transition-all font-semibold cursor-pointer ${
                       simType === "simulation"
-                        ? "bg-[#C5A059] text-white"
+                        ? "bg-[#C5A059] text-slate-950 font-bold"
                         : "text-slate-400 hover:text-white"
                     }`}
                   >
@@ -329,7 +329,7 @@ export default function EntranceNotificationsModal({
               onClick={() => setFilterTab("all")}
               className={`px-3 py-1 rounded-xl transition-all cursor-pointer ${
                 filterTab === "all"
-                  ? "bg-[#C5A059] text-white font-bold"
+                  ? "bg-[#C5A059] text-slate-950 font-bold"
                   : "bg-slate-800/60 text-slate-400 hover:bg-slate-800"
               }`}
             >

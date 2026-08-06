@@ -25,6 +25,8 @@ import EntranceNotificationsModal from "./components/EntranceNotificationsModal"
 import TutorialVideoModal from "./components/TutorialVideoModal";
 import LeadCaptureModal from "./components/LeadCaptureModal";
 import OnboardingModal from "./components/OnboardingModal";
+import { Loader2, CheckCircle, AlertCircle, X } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 
 import { 
   initialUsers, 
@@ -254,6 +256,11 @@ export default function App() {
     ];
   });
   const [activeEntranceToast, setActiveEntranceToast] = useState<EntranceNotification | null>(null);
+  const [docUploadToast, setDocUploadToast] = useState<{
+    status: "loading" | "success" | "error";
+    message: string;
+    fileName?: string;
+  } | null>(null);
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
   
   // Server data synchronization states
@@ -292,7 +299,7 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(notif)
-      }).catch(err => console.error("Failed to persist notification on server:", err));
+      }).catch(err => console.warn("Failed to persist notification on server:", err));
     };
 
     // Check if we should exclude manager/admin/owner logins from timeline & stats
@@ -467,7 +474,7 @@ export default function App() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(u)
-          }).catch((err) => console.error("Failed to sync migrated user with server:", err));
+          }).catch((err) => console.warn("Failed to sync migrated user with server:", err));
         });
       }
       return updatedList;
@@ -525,7 +532,7 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.error("Failed to fetch shared data:", err);
+        console.warn("Failed to fetch shared data (will retry):", err);
       }
     };
 
@@ -551,13 +558,17 @@ export default function App() {
         },
         body: JSON.stringify({ key, data })
       });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (res.ok) {
         setSyncStatus("synced");
       } else {
         setSyncStatus("error");
       }
     } catch (err) {
-      console.error(`Error syncing ${key} with server:`, err);
+      console.warn(`Error syncing ${key} with server (will retry):`, err);
       setSyncStatus("error");
     }
   };
@@ -583,6 +594,10 @@ export default function App() {
             "Authorization": `Bearer ${token}`
           }
         });
+        if (res.status === 401) {
+          handleLogout();
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           if (data.isInitialized) {
@@ -634,7 +649,7 @@ export default function App() {
           setSyncStatus("error");
         }
       } catch (err) {
-        console.error("Failed to load server data:", err);
+        console.warn("Failed to load server data:", err);
         setSyncStatus("error");
       } finally {
         setIsDataLoaded(true);
@@ -1114,29 +1129,89 @@ export default function App() {
   };
 
   // --- DOCUMENTS ARCHIVE HANDLERS ---
-  const handleUploadDocument = (
+  const handleUploadDocument = async (
     caseId: string, 
-    docData: Omit<Document, "id" | "versions" | "uploadedBy" | "uploadedById" | "timestamp">
-  ) => {
-    const newDoc: Document = {
-      ...docData,
-      id: `doc-${Date.now()}`,
-      caseId,
-      uploadedBy: currentUser.name,
-      uploadedById: currentUser.id,
-      timestamp: new Date().toISOString().replace("T", " ").substring(0, 16),
-      versions: []
-    };
-    setDocuments((prev) => [newDoc, ...prev]);
+    docData: Omit<Document, "id" | "versions" | "uploadedBy" | "uploadedById" | "timestamp">,
+    file?: File | null
+  ): Promise<boolean> => {
+    setDocUploadToast({
+      status: "loading",
+      message: `جاري رفع وأرشفة المستند: "${docData.title}"...`,
+      fileName: docData.fileName
+    });
 
-    // Append Case Timeline event
-    handleAddCaseTimelineEvent(
-      caseId, 
-      `📁 تم أرشفة مستند قانوني جديد بالملف السحابي: ${docData.title} (${docData.fileName})`, 
-      "مذكرة"
-    );
+    try {
+      let fileUrl = docData.fileUrl || "";
 
-    logActivity(`📁 قام بأرشفة مستند رسمي بملف القضية: ${docData.title}`);
+      // If a file object is provided, upload it to the backend api
+      if (file) {
+        const token = localStorage.getItem("meezan_session_token");
+        const formPayload = new FormData();
+        formPayload.append("file", file);
+
+        const response = await fetch("/api/documents/upload", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`
+          },
+          body: formPayload
+        });
+
+        if (response.status === 401) {
+          handleLogout();
+          throw new Error("انتهت الجلسة الأمنية، يرجى تسجيل الدخول مجدداً.");
+        }
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || "فشل رفع الملف من الخادم");
+        }
+        fileUrl = data.fileReference;
+      }
+
+      const newDoc: Document = {
+        ...docData,
+        id: `doc-${Date.now()}`,
+        caseId,
+        uploadedBy: currentUser.name,
+        uploadedById: currentUser.id,
+        timestamp: new Date().toISOString().replace("T", " ").substring(0, 16),
+        versions: [],
+        fileUrl: fileUrl || docData.fileUrl
+      };
+      setDocuments((prev) => [newDoc, ...prev]);
+
+      // Append Case Timeline event
+      handleAddCaseTimelineEvent(
+        caseId, 
+        `📁 تم أرشفة مستند قانوني جديد بالملف السحابي: ${docData.title} (${docData.fileName})`, 
+        "مذكرة"
+      );
+
+      logActivity(`📁 قام بأرشفة مستند رسمي بملف القضية: ${docData.title}`);
+
+      setDocUploadToast({
+        status: "success",
+        message: `تم رفع وأرشفة المستند "${docData.title}" بنجاح!`,
+        fileName: docData.fileName
+      });
+
+      // Clear the toast after 3 seconds
+      setTimeout(() => {
+        setDocUploadToast(null);
+      }, 3000);
+
+      return true;
+    } catch (error: any) {
+      console.error("Document upload failed:", error);
+      setDocUploadToast({
+        status: "error",
+        message: `تعذر رفع المستند: ${error.message || "عطل في الاتصال بالشبكة"}`,
+        fileName: docData.fileName
+      });
+      return false;
+    }
   };
 
   const handleUploadNewVersion = (docId: string, versionData: { fileName: string; fileSize: string }) => {
@@ -1288,7 +1363,7 @@ export default function App() {
             method: "POST",
             headers,
             body: JSON.stringify(updatedUser)
-          }).catch((err) => console.error("Failed to update user password on server:", err));
+          }).catch((err) => console.warn("Failed to update user password on server:", err));
           return updatedUser;
         }
         return u;
@@ -1310,7 +1385,13 @@ export default function App() {
 
   // Render proper View based on activeTab
   const renderActiveView = () => {
-    const isOwner = currentUser.role === UserRole.Owner || currentUser.role === "صاحب المكتب";
+    const isOwner = currentUser.role === UserRole.Owner || 
+                    currentUser.role === "صاحب المكتب" || 
+                    currentUser.isSuperUser === true || 
+                    currentUser.id === "usr-super" || 
+                    currentUser.email === "superuser@lawmizan.com" ||
+                    currentUser.role === "SuperAdmin" || 
+                    currentUser.role === UserRole.SuperAdmin;
 
     // Data Scope for Lawyer Role Privacy
     const scopedCases = isOwner
@@ -1352,6 +1433,7 @@ export default function App() {
       : clients.filter(
           (cl) =>
             scopedCases.some((c) => c.clientId === cl.id) ||
+            !cases.some((c) => c.clientId === cl.id && !c.isDeleted) ||
             cl.id === currentUser.id
         );
 
@@ -1678,7 +1760,9 @@ export default function App() {
 
   if (!isLoggedIn) {
     return (
-      <>
+      <div className={`main-app-container min-h-screen font-sans antialiased overflow-x-hidden transition-colors duration-300 selection:bg-[#C5A059] selection:text-white ${
+        darkMode ? "dark bg-[#080F18] text-slate-100" : "bg-[#F4F7FA] text-slate-900"
+      }`} dir="rtl">
         {/* Live Toast Banner if active */}
         <EntranceToast
           notification={activeEntranceToast}
@@ -1766,7 +1850,7 @@ export default function App() {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(enrichedUser)
-            }).catch(err => console.error("Failed to persist registration on server:", err));
+            }).catch(err => console.warn("Failed to persist registration on server:", err));
 
             triggerEntranceNotification(enrichedUser.name, enrichedUser.role, enrichedUser.email, "register");
           }}
@@ -1795,15 +1879,15 @@ export default function App() {
           }}
           darkMode={darkMode}
         />
-      </>
+      </div>
     );
   }
 
   const unreadNotificationCount = entranceNotifications.filter(n => !n.isRead).length;
 
   return (
-    <div className={`min-h-screen font-sans antialiased overflow-x-hidden transition-colors duration-300 selection:bg-[#C5A059] selection:text-white ${
-      darkMode ? "bg-[#080F18] text-slate-200" : "bg-[#F4F7FA] text-[#334155]"
+    <div className={`main-app-container min-h-screen font-sans antialiased overflow-x-hidden transition-colors duration-300 selection:bg-[#C5A059] selection:text-white ${
+      darkMode ? "dark bg-[#080F18] text-slate-100" : "bg-[#F4F7FA] text-slate-900"
     }`} dir="rtl">
       
       {/* Live Toast Banner overlay */}
@@ -1813,6 +1897,83 @@ export default function App() {
         onOpenModal={() => setIsNotificationModalOpen(true)}
         darkMode={darkMode}
       />
+
+      {/* Document Upload Toast Banner */}
+      <AnimatePresence>
+        {docUploadToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -60, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -40, scale: 0.95 }}
+            transition={{ type: "spring", stiffness: 350, damping: 25 }}
+            className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] w-full max-w-md px-4 pointer-events-auto"
+            dir="rtl"
+          >
+            <div className={`p-4 rounded-2xl shadow-2xl border flex items-center gap-3 relative overflow-hidden backdrop-blur-xl ${
+              darkMode 
+                ? "bg-[#0D1B2A]/95 border-[#C5A059]/40 text-white shadow-black/80" 
+                : "bg-white/95 border-[#C5A059]/50 text-slate-900 shadow-slate-400/50"
+            }`}>
+              {/* Top accent bar based on state */}
+              <div className={`absolute top-0 right-0 left-0 h-1 ${
+                docUploadToast.status === "loading" 
+                  ? "bg-amber-500 animate-pulse" 
+                  : docUploadToast.status === "success" 
+                  ? "bg-emerald-500" 
+                  : "bg-rose-500"
+              }`} />
+
+              {/* Icon */}
+              <div className="shrink-0">
+                {docUploadToast.status === "loading" ? (
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center">
+                    <Loader2 className="w-5 h-5 text-amber-500 animate-spin" />
+                  </div>
+                ) : docUploadToast.status === "success" ? (
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+                    <CheckCircle className="w-5 h-5 text-emerald-500" />
+                  </div>
+                ) : (
+                  <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center">
+                    <AlertCircle className="w-5 h-5 text-rose-500" />
+                  </div>
+                )}
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                    docUploadToast.status === "loading"
+                      ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                      : docUploadToast.status === "success"
+                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                      : "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+                  }`}>
+                    {docUploadToast.status === "loading" ? "جاري الرفع" : docUploadToast.status === "success" ? "تم بنجاح" : "خطأ في الرفع"}
+                  </span>
+                  {docUploadToast.status !== "loading" && (
+                    <button 
+                      onClick={() => setDocUploadToast(null)} 
+                      className="p-1 rounded-md hover:bg-slate-800/20 text-slate-400 hover:text-slate-300 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                <p className="text-sm font-bold mt-1.5 text-right">
+                  {docUploadToast.message}
+                </p>
+                {docUploadToast.fileName && (
+                  <p className="text-[11px] text-slate-400 mt-0.5 font-mono text-right truncate">
+                    الملف: {docUploadToast.fileName}
+                  </p>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Entrance Notifications Log Modal */}
       <EntranceNotificationsModal

@@ -487,7 +487,7 @@ export default function SubscriptionView({
             onClick={() => setBillingCycle("yearly")}
             className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               billingCycle === "yearly" 
-                ? "bg-[#C5A059] text-white shadow" 
+                ? "bg-[#C5A059] text-slate-950 shadow" 
                 : "text-slate-400 hover:text-white"
             }`}
           >
@@ -497,7 +497,7 @@ export default function SubscriptionView({
             onClick={() => setBillingCycle("monthly")}
             className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               billingCycle === "monthly" 
-                ? "bg-[#C5A059] text-white shadow" 
+                ? "bg-[#C5A059] text-slate-950 shadow" 
                 : "text-slate-400 hover:text-white"
             }`}
           >

@@ -18,7 +18,10 @@ import {
   Eye, 
   EyeOff,
   CheckCircle2,
-  Briefcase
+  Briefcase,
+  X,
+  FileText,
+  ShieldAlert
 } from "lucide-react";
 import { User, UserRole, OfficeConfig } from "../types";
 import { comparePassword, hashPassword, validatePasswordPolicy, isWeakDefaultPassword } from "../lib/auth";
@@ -74,6 +77,8 @@ export default function AuthView({
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [regError, setRegError] = useState("");
   const [regSuccess, setRegSuccess] = useState(false);
+  const [agreeToTerms, setAgreeToTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
 
   // Forced Password Reset Flow States
   const [resetRequiredUser, setResetRequiredUser] = useState<User | null>(null);
@@ -146,6 +151,12 @@ export default function AuthView({
     }
     if (!regEmail.trim() || !regEmail.includes("@")) {
       setRegError("يرجى كتابة بريد إلكتروني صحيح");
+      return;
+    }
+
+    // Validate Terms agreement
+    if (!agreeToTerms) {
+      setRegError("يرجى قراءة والموافقة على سياسة الاستخدام وإخلاء المسؤولية القانونية للمتابعة");
       return;
     }
 
@@ -672,6 +683,28 @@ export default function AuthView({
                   </div>
                 )}
 
+                {/* Terms of Use and Disclaimer Checkbox */}
+                <div className="flex items-start gap-2.5 mt-3 bg-slate-950/20 p-2.5 rounded-xl border border-slate-800/60 text-right">
+                  <input
+                    id="agree-to-terms-checkbox"
+                    type="checkbox"
+                    checked={agreeToTerms}
+                    onChange={(e) => setAgreeToTerms(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-[#C5A059] focus:ring-[#C5A059] cursor-pointer mt-0.5"
+                  />
+                  <label htmlFor="agree-to-terms-checkbox" className="text-[11px] text-slate-300 leading-normal select-none cursor-pointer">
+                    لقد قرأت بعناية وأوافق على التزام مكتبنا بـ{" "}
+                    <button
+                      type="button"
+                      onClick={() => setShowTermsModal(true)}
+                      className="text-[#C5A059] font-black hover:underline underline-offset-2 hover:text-[#e4be78]"
+                    >
+                      شروط سياسة الاستخدام وإخلاء المسؤولية القانونية
+                    </button>{" "}
+                    الخاصة بمنصة ميزان السحابية.
+                  </label>
+                </div>
+
                 <button
                   type="submit"
                   disabled={regSuccess}
@@ -689,6 +722,142 @@ export default function AuthView({
         </div>
 
       </div>
+
+      {/* Terms of Use and Disclaimer Modal */}
+      <AnimatePresence>
+        {showTermsModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto"
+            onClick={() => setShowTermsModal(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 30, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full max-w-3xl rounded-3xl border border-slate-800 bg-[#0D1B2A] text-slate-100 shadow-2xl overflow-hidden text-right my-8"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between p-5 border-b border-slate-800 bg-slate-950/40">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#C5A059]/10 border border-[#C5A059]/30 flex items-center justify-center text-[#C5A059]">
+                    <ShieldAlert className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-sm text-white">اتفاقية سياسة الاستخدام وإخلاء المسؤولية القانونية</h3>
+                    <p className="text-[10px] text-[#C5A059] font-semibold">منصة ميزان الرقمية لإدارة المكاتب القانونية</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowTermsModal(false)}
+                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 md:p-8 space-y-6 max-h-[60vh] overflow-y-auto custom-scrollbar leading-relaxed">
+                
+                {/* Preamble */}
+                <div className="p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl">
+                  <p className="text-xs text-slate-300 font-medium text-justify">
+                    أهلاً بكم في <strong>منصة ميزان الرقمية</strong>. يرجى قراءة هذه الاتفاقية القانونية بتمعن ودقة قبل إتمام عملية التسجيل. بإنشاء حسابك أو استخدام المنصة، فإنك تقر وتلتزم التزاماً كاملاً وغير مشروط بكافة البنود والشروط والسياسات المدرجة أدناه، وتعتبر هذه الاتفاقية بمثابة عقد ملزم قانوناً بين مكتبك الموقر وإدارة منصة ميزان.
+                  </p>
+                </div>
+
+                <div className="space-y-5">
+                  
+                  {/* Article 1 */}
+                  <div className="space-y-1.5">
+                    <h4 className="text-xs font-black text-[#C5A059] flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#C5A059]"></span>
+                      المادة الأولى: الطبيعة القانونية والمهنية للمنصة
+                    </h4>
+                    <p className="text-[11px] text-slate-300 text-justify">
+                      منصة ميزان هي أداة وتطبيق سحابي تقني مخصص حصراً لتنظيم وأتمتة العمل الإداري والأرشفة وتيسير الأعمال اليومية لمكاتب المحاماة والاستشارات القانونية. المنصة لا تقدم أي نوع من أنواع النصائح القانونية أو الاستشارات، ولا تُغني بأي شكل من الأشكال عن الفطنة المهنية والتحقق البشري الدقيق والمباشر من قبل المحامي المرخص لكافة مواعيد الجلسات والبيانات القانونية ومواعيد سقوط الخصومات أو انقضاء الدعاوى.
+                    </p>
+                  </div>
+
+                  {/* Article 2 */}
+                  <div className="space-y-1.5">
+                    <h4 className="text-xs font-black text-[#C5A059] flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#C5A059]"></span>
+                      المادة الثانية: سرية البيانات، أمان الحسابات والمستندات المرفوعة
+                    </h4>
+                    <p className="text-[11px] text-slate-300 text-justify">
+                      1. يلتزم المحامي أو مسؤول المكتب التزاماً تاماً باختيار كلمات مرور قوية وحفظ سرية بيانات الدخول لجميع الحسابات الفرعية بالمكتب والشركاء والمساعدين والموكلين.<br />
+                      2. يقع العبء الكامل والمسؤولية القانونية المطلقة على عاتق مستخدم المنصة حيال صحة، دقة، شرعية ونوعية كافة البيانات، المعلومات، المذكرات، والمستندات والملفات المرفوعة أو المسجلة داخل النظام.<br />
+                      3. تلتزم إدارة منصة ميزان باتخاذ كافة الإجراءات والتدابير التقنية الممكنة والمعايير الأمنية المعتمدة لحماية قواعد البيانات وتشفير كلمات المرور وحجب الوصول غير المصرح به للبيانات السحابية.
+                    </p>
+                  </div>
+
+                  {/* Article 3 */}
+                  <div className="space-y-1.5">
+                    <h4 className="text-xs font-black text-[#C5A059] flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#C5A059]"></span>
+                      المادة الثالثة: إخلاء طرف تام ومطلق من المسؤولية القانونية (Disclaimer)
+                    </h4>
+                    <div className="text-[11px] text-slate-300 text-justify space-y-2 bg-slate-950/40 p-4 rounded-xl border border-slate-800">
+                      <p>تُخلي إدارة منصة ميزان ومطوروها وشركتها المالكة طرفهم إخلاءً تاماً، مطلقاً، ونهائياً من أي مسؤولية مدنية، جنائية، مالية أو تعويضية عن أي أضرار مادية أو معنوية، مباشرة أو غير مباشرة، أو تفويت فرص قد تنشأ للمستخدم أو للغير، بما يشمل على سبيل المثال لا الحصر:</p>
+                      <ul className="list-disc list-inside space-y-1 pr-2">
+                        <li>فوات الجلسات القضائية أو مواعيد الحضور أو الطعون والمدد القانونية نتيجة حدوث أخطاء في التسجيل أو خلل طارئ في شبكات الاتصال أو التنبيهات.</li>
+                        <li>الفقدان الكلي أو الجزئي للبيانات والمستندات نتيجة كشف الرموز السرية من طرف المستخدم أو الاختراقات الناجمة عن إهمال المستخدم الأمني لأجهزته الشخصية.</li>
+                        <li>الانقطاع المؤقت في عمل الخدمة لأغراض الصيانة الدورية أو التحديثات الفنية الضرورية لتحسين استمرارية وكفاءة النظام.</li>
+                        <li>تغيير قوانين أو إجراءات أو محاكم الدول وتأثيرها على سير عمل ملفات الموكلين وقضاياهم.</li>
+                      </ul>
+                      <p className="font-bold text-amber-400 mt-1">تُقدم الخدمة "كما هي" دون أي ضمانات صريحة أو ضمنية تتجاوز الاستخدام التقني المعتاد.</p>
+                    </div>
+                  </div>
+
+                  {/* Article 4 */}
+                  <div className="space-y-1.5">
+                    <h4 className="text-xs font-black text-[#C5A059] flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#C5A059]"></span>
+                      المادة الرابعة: شروط الاستخدام المقبول والمحظورات القانونية
+                    </h4>
+                    <p className="text-[11px] text-slate-300 text-justify">
+                      يُمنع منعاً باتاً استخدام المنصة في تخزين أو رفع أي مستندات أو ملفات تحتوي على برمجيات ضارة، ملفات مخترقة، أو استخدام النظام لأية أغراض غير قانونية تخالف الدستور أو التشريعات المعمول بها داخل جمهورية مصر العربية أو أي دولة عربية أخرى يُمارس فيها المحامي نشاطه. لإدارة ميزان الحق الكامل في تعليق أو إنهاء حساب أي مكتب يثبت مخالفته لهذه الشروط فوراً ودون إنذار سابق.
+                    </p>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-5 border-t border-slate-800 bg-slate-950/40 flex flex-col sm:flex-row gap-4 items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-medium">منصة ميزان القانونية • إصدار شروط الاستخدام يوليو 2026</span>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAgreeToTerms(true);
+                      setShowTermsModal(false);
+                    }}
+                    className="px-5 py-2.5 rounded-xl text-xs font-bold bg-[#C5A059] text-slate-950 hover:bg-[#b08b47] hover:shadow-lg hover:shadow-amber-500/5 transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>موافق وألتزم بالشروط</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowTermsModal(false)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all cursor-pointer"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );
