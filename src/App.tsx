@@ -963,7 +963,7 @@ export default function App() {
   const handleDeleteClient = (clientId: string) => {
     const target = clients.find(c => c.id === clientId);
     if (target) {
-      setClients((prev) => prev.filter((c) => c.id !== clientId));
+      setClients((prev) => prev.map((c) => c.id === clientId ? { ...c, isDeleted: true } : c));
       logActivity(`🗑️ قام بحذف الموكل: ${target.name} من الدفتر`);
     }
   };
@@ -1243,9 +1243,22 @@ export default function App() {
     logActivity(`🔄 رفع تعديل ومسودة إصدار جديدة للمستند: ${docTitle}`);
   };
 
-  const handleDeleteDocument = (docId: string) => {
+  const handleDeleteDocument = async (docId: string) => {
     const target = documents.find(d => d.id === docId);
     if (target) {
+      const token = localStorage.getItem("meezan_session_token");
+      if (token) {
+        try {
+          await fetch(`/api/documents/${docId}`, {
+            method: "DELETE",
+            headers: {
+              "Authorization": `Bearer ${token}`
+            }
+          });
+        } catch (err) {
+          console.error("Failed to delete physical file on server:", err);
+        }
+      }
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
       logActivity(`🗑️ قام بحذف مستند الأرشيف: ${target.title}`);
     }
